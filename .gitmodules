@@ -1,3 +1,18 @@
 [submodule "Mainboard"]
 	path = Hardware/Mainboard
 	url = https://github.com/pulp-bio/sensei-base-board.git
+[submodule "exg-shield"]
+	path = Hardware/exg-shield
+	url = https://github.com/pulp-bio/sensei-exg-shield.git
+[submodule "emg-shield"]
+	path = Hardware/emg-shield
+	url = https://github.com/pulp-bio/sensei-emg-shield.git
+[submodule "ppg-shield"]
+	path = Hardware/ppg-shield
+	url = https://github.com/pulp-bio/sensei-ppg-shield.git
+[submodule "template-shield"]
+	path = Hardware/template-shield
+	url = https://github.com/pulp-bio/sensei-template-shield.git
+[submodule "debug-board"]
+	path = Hardware/debug-board
+	url = https://github.com/pulp-bio/sensei-debug-board.git
