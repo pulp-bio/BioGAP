@@ -1,0 +1,3 @@
+[submodule "Mainboard"]
+	path = Hardware/Mainboard
+	url = https://github.com/pulp-bio/sensei-base-board.git
