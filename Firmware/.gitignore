@@ -1,0 +1,41 @@
+# Copyright (c) 2024 ETH Zurich
+# SPDX-License-Identifier: Apache-2.0
+
+# Editors
+*.swp
+*~
+compile_commands.json
+.cache/
+build*/
+.vscode/
+
+# Build
+/build*/
+
+__pycache__
+build
+dist
+**/*.egg*
+*.vscode
+.DS_Store
+*.html
+.ipynb_checkpoints/
+*#
+*.onnx
+*.pkl
+*.data
+*#
+
+# Python Virtualenv
+venv/
+
+# MacOS
+.DS_Store
+._.DS_Store
+
+# Images in the src_GAP folder
+src_GAP/*.pgm
+src_GAP/*.png
+src_GAP/*.ppm
+
+serial_log.log
