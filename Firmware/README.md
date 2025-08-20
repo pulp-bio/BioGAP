@@ -1,7 +1,7 @@
 
 # ExG Stream Demo
 
-This is the 
+This folder contains the firmware to use BioGAP in streaming mode.
 
 ## Getting Started
 Make sure to attach the e Mainboard to the ExGShield or the EMG shield.

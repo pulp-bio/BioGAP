@@ -5,6 +5,7 @@ This repository contains the complete design files for the **BioGAP v2**, an int
 ## Overview
 
 The **BioGAP v2** brings together modular sensing shields, robust edge processing, and flexible debugging in a single, cohesive system. It includes the main processing board and a range of specialized shields for biopotential (ExG, EMG) and PPG sensing. A dedicated debug board and a reference template shield support rapid prototyping and customization for diverse biomedical and wearable monitoring applications.
+![BioGAP Overview](Documentation/system_overview.png)
 
 ## Included PCBs
 
