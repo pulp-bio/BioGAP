@@ -29,8 +29,8 @@
 #ifndef PWR_BSP_H_
 #define PWR_BSP_H_
 
-#include <stdint.h>   // Defines uint32_t, uint8_t, etc.
-#include <stdbool.h>  // Defines bool
+#include <stdbool.h> // Defines bool
+#include <stdint.h>  // Defines uint32_t, uint8_t, etc.
 
 /**
  * @brief Initialise all the pwr hardware interface.
@@ -45,28 +45,6 @@ int pwr_bsp_init();
 int pwr_bsp_start();
 int pwr_charge_enable();
 
-int pwr_ads_on_unipolar();
-int pwr_ads_off();
-
-int pwr_ads_on_bipolar();
-
-int pwr_update_battery_status();
-
-int pwr_get_full_status(uint32_t *soc, uint32_t *bat_mv, uint32_t *power_mw, bool *charging, const char **power_source);
-
-// Returns the battery state-of-charge in percent (0–100).
-uint32_t bsp_get_battery_soc(void);
-
-// Returns the battery voltage in millivolts.
-uint32_t bsp_get_battery_voltage(void);
-
-// Returns the total system power consumption in milliwatts.
-uint32_t bsp_get_total_power_mw(void);
-
-// Returns 1 if the battery is being charged (i.e., external power is active), 0 otherwise.
-uint8_t bsp_is_charging(void);
-
-// Returns a string representing the current power source ("USB/External" or "Battery").
-const char* bsp_get_power_source(void);
+extern bool flag_isr_soft_reset;
 
 #endif /* PWR_BSP_H_ */

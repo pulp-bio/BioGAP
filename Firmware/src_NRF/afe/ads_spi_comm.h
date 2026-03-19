@@ -1,7 +1,7 @@
 /*
  * ----------------------------------------------------------------------
  *
- * File: ads_appl.c
+ * File: ads_spi_comm.h
  *
  * Last edited: 23.07.2025
  *
@@ -25,48 +25,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "ads_appl.h"
-#include "ads_spi.h"
-#include "ble_appl.h"
-#include "common.h"
 
-#include "pwr/pwr.h"
-#include "bsp/pwr_bsp.h"
-#include "pwr/pwr_common.h"
+#ifndef ADS_SPI_COMM_H
+#define ADS_SPI_COMM_H
 
-#include <zephyr/logging/log.h>
-#include <zephyr/logging/log_ctrl.h>
+#include <stdint.h>
+#include "afe/ads_appl.h"
 
-/* Initialize the logging module */
-LOG_MODULE_REGISTER(ads_appl, LOG_LEVEL_DBG);
+/*==============================================================================
+ * Function Declarations - Low-Level SPI Transfers
+ *============================================================================*/
 
+/**
+ * @brief Perform SPI read transaction with command
+ */
+int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id);
 
-enum ADS_function_t ADS_function = STILL;
+/**
+ * @brief Read ADC sample data in continuous mode
+ */
+int ads1298_read_samples(uint8_t *data, uint8_t size, ads_device_id_t ads_id);
 
-static int trigger_value = 0x00;
-//uint8_t InitParams[5]={2,1,0,0,0};  //SAMPLE RATE 1KSPS, CHANNEL FUNCTION SHORT, NC, NC, GAIN = 6
+/**
+ * @brief Write command or register data to ADS1298
+ */
+int ads1298_write_spi(uint8_t size, ads_device_id_t ads_id);
 
-
-enum ADS_function_t Get_ADS_Function()
-{
-  return(ADS_function);
-}
-
-void Set_ADS_Function(enum ADS_function_t f)
-{
-  ADS_function=f;
-}
-
-
-
-void set_trigger(uint8_t value)
-{
-  trigger_value = value;
-
-}
-
-uint8_t get_trigger()
-{
-  return trigger_value;
-
-}
+#endif // ADS_SPI_COMM_H

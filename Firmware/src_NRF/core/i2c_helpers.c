@@ -26,7 +26,7 @@
  * limitations under the License.
  */
 
-#include "i2c_helpers.h"
+#include "core/i2c_helpers.h"
 
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>

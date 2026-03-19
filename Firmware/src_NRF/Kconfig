@@ -45,3 +45,76 @@ config HAS_SEGGER_RTT
 	default y
 
 endmenu
+
+config SENSOR_EMG
+	bool "EMG sensor"
+	default n
+	help
+	  Enable support for EMG sensor. This will include the necessary drivers,
+	  state machine states, and data processing for EMG data acquisition.
+
+config SENSOR_EEG
+	bool "EEG sensor"
+	default n
+	help
+	  Enable support for EEG sensor. This will include the necessary drivers,
+	  state machine states, and data processing for EEG data acquisition.
+
+menu "State Machine Configuration"
+
+config STATE_MACHINE_USE_CPU_IDLE
+	bool "Use k_cpu_idle() instead of k_sleep() in state machine loop"
+	default n
+	help
+	  If enabled, the state machine thread will use k_cpu_idle() instead of
+	  k_sleep(K_USEC(1)) between state run() iterations. k_cpu_idle() keeps
+	  the CPU more responsive but may consume more power. k_sleep() yields
+	  CPU time to other threads more effectively and reduces power consumption.
+
+endmenu
+
+menu "Multi-Board Sync Configuration"
+
+choice BOARD_SYNC_ROLE
+	prompt "Board synchronization role"
+	default BOARD_SYNC_ROLE_STANDALONE
+	help
+	  Select the role of this board in multi-board synchronization.
+	  PRIMARY generates sync pulses, SECONDARY waits for them.
+
+config BOARD_SYNC_ROLE_STANDALONE
+	bool "Standalone (no inter-board sync)"
+	help
+	  Board operates independently without cross-board synchronization.
+
+config BOARD_SYNC_ROLE_PRIMARY
+	bool "Primary (sync master)"
+	help
+	  Board generates sync pulses. Starts acquisition immediately and
+	  asserts GPIO trigger line for secondary boards.
+
+config BOARD_SYNC_ROLE_SECONDARY
+	bool "Secondary (sync follower)"
+	help
+	  Board waits for sync pulse from primary before starting acquisition.
+	  Configures GPIO as input with interrupt.
+
+endchoice
+
+config BOARD_ID
+	int "Unique board identifier (1-255)"
+	default 1
+	help
+	  Unique identifier for this board. Embedded in packet metadata
+	  to distinguish data sources during post-processing.
+	  Recommended: Board A (EEG) = 1, Board B (EMG) = 2.
+
+config BOARD_SYNC_PERIODIC_MS
+	int "Periodic sync pulse interval (ms)"
+	default 1000
+	depends on BOARD_SYNC_ROLE_PRIMARY
+	help
+	  Interval in milliseconds between periodic sync pulses.
+	  Used for post-hoc drift correction. Set to 0 to disable.
+
+endmenu

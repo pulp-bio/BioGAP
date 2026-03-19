@@ -29,11 +29,11 @@
 #ifndef MAX86150_H_
 #define MAX86150_H_
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/kernel.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <string.h>
 
 // Define the I2C node used for the sensor.
 // Ensure that your board’s DTS defines a node with label "max86150ppg"
@@ -41,20 +41,20 @@
 #define I2C0_NODE DT_NODELABEL(max86150ppg)
 
 // MAX86150 7-bit I2C address
-#define MAX86150_ADDRESS          0x5E
+#define MAX86150_ADDRESS 0x5E
 
 // For example purposes, we assume two active devices (e.g. red and IR)
-#define activeDevices             2
+#define activeDevices 2
 
 // Each uint32_t occupies 4 bytes; adjust STORAGE_SIZE to your RAM limits.
 #define STORAGE_SIZE 40
 
 typedef struct Record {
-    uint32_t red[STORAGE_SIZE];
-    uint32_t IR[STORAGE_SIZE];
-    // int32_t ecg[STORAGE_SIZE]; // Uncomment if ECG is used
-    uint16_t head;
-    uint16_t tail;
+  uint32_t red[STORAGE_SIZE];
+  uint32_t IR[STORAGE_SIZE];
+  // int32_t ecg[STORAGE_SIZE]; // Uncomment if ECG is used
+  uint16_t head;
+  uint16_t tail;
 } sense_struct;
 
 enum MAX20303_PPG_function_t { PPG_ACTIVE, PPG_STILL };
