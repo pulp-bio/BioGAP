@@ -1,0 +1,5 @@
+# Copyright (c) 2019 Linaro Limited
+# SPDX-License-Identifier: Apache-2.0
+
+config SHIELD_SENSEI_PPGSHIELD 
+	def_bool $(shields_list_contains,SENSEI_PPGShield)

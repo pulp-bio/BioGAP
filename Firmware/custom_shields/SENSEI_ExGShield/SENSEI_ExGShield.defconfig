@@ -1,0 +1,10 @@
+# Copyright (c) 2024 Nordic Semiconductor ASA
+# SPDX-License-Identifier: Apache-2.0
+
+CONFIG_GPIO_PCA64XXA=n
+CONFIG_BME680=n
+
+
+CONFIG_TFM_SECURE_UART=n
+CONFIG_TFM_LOG_LEVEL_SILENCE=y
+

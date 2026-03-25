@@ -1,0 +1,31 @@
+# Copyright (c) 2024 Arduino SA
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+  Blabla
+
+  
+
+
+compatible: "ti,ads1298_a"
+
+properties:
+  reg:
+    type: int
+    required: true
+    description: Chip select for the device
+
+  spi-max-frequency:
+    type: int
+    required: true
+    description: Maximum SPI clock frequency
+    
+  duplex:
+    type: int
+    required: false
+    description: Full (1) or half (0) duplex SPI communication
+
+  frame-format:
+    type: int
+    required: false
+    description: SPI frame format (e.g., Motorola SPI = 0)

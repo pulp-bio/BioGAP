@@ -1,0 +1,100 @@
+/*
+ * Copyright (c) 2022 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
+
+ / {
+   
+	sensei_pwr: sensei_pwr {
+		compatible = "gpio-leds";
+		gpio_ads1298_pwr: gpio_ads1298_pwr {
+			gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;  // nRF_P0.31 corresponds to gpio0 31
+			label = "ADS1298_PWR";
+		};
+	};
+	
+	gpio_nodes {
+        compatible = "gpio-leds";
+
+        gpio_ads1298_a_spi_cs: gpio_ads1298_a_spi_cs {
+            gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
+            label = "ADS1298_A_SPI_CS";
+        };
+
+        gpio_ads1298_b_spi_cs: gpio_ads1298_b_spi_cs {
+            gpios = <&gpio1 9 GPIO_ACTIVE_LOW>;
+            label = "ADS1298_B_SPI_CS";
+        };
+		
+		gpio_ads1298_start_pin: gpio_ads1298_start_pin {
+            gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
+            label = "ADS1298_START_PIN";
+        };
+    };
+	
+	buttons{
+		gpio_ads1298_a_dr: gpio_ads1298_a_dr {
+			gpios = <&gpio0 2 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "ADS1298_A_DR";
+		};
+		gpio_ppg_max86150_dr: gpio_ppg_max86150_dr {
+			gpios = <&gpio0 12 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "MAX86150_DR";
+		};
+	};
+	
+	
+	
+};
+
+
+
+/* STEP 2.1 - Add the SPI peripheral to spi2 */
+&i2c2 {	status = "disabled";};
+&uart2 {	status = "disabled";};
+ 
+
+/*
+&spi2 {
+    status = "okay";
+    compatible = "nordic,nrf-spim";
+    pinctrl-0 = <&spi_dummy>;
+};*/
+
+&spi2 {
+    compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi2_default>;
+	pinctrl-1 = <&spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio1 11 GPIO_ACTIVE_LOW>;
+	ads1298_a: ads1298_a@0 {
+		compatible = "ti,ads1298_a";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		duplex = <1>;              // Full duplex
+        frame-format = <0>;        // SPI frame format (default, typically 0)
+	};
+};
+
+
+&pinctrl {
+	spi2_default: spi2_default {
+		group1 {
+				psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+						<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+						<NRF_PSEL(SPIM_MISO, 0, 10)>;
+		};
+	};
+
+	spi2_sleep: spi2_sleep {
+		group1 {
+				psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+						<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+						<NRF_PSEL(SPIM_MISO, 0, 10)>;
+				low-power-enable;
+		};
+	};
+};
+
