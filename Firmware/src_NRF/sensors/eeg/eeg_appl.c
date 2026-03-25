@@ -57,6 +57,8 @@
 // Include inter-board hardware synchronization
 #include "core/board_sync.h"
 
+extern uint16_t counter;
+
 LOG_MODULE_REGISTER(eeg_appl, LOG_LEVEL_INF);
 
 #define EEG_THREAD_STACK_SIZE 2048
@@ -257,6 +259,7 @@ static void eeg_streaming_thread(void *arg1, void *arg2, void *arg3) {
 
     LOG_INF("EEG streaming thread stopping");
     ads_set_function(ADS_STILL);
+    counter = 0;
     LOG_INF("ADS set to STILL");
     ads_stop();
     LOG_INF("ADS stopped");
