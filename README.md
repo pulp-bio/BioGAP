@@ -37,6 +37,9 @@ The **BioGAP v2** brings together modular sensing shields, robust edge processin
 - Versatile electrode configurations for a range of biosignal recordings.
 - User-friendly debugging and expansion with standardized board-to-board connectors.
 
+## Documentation
+For the documentation of the Firmware please refer to the [Firmware Documentation](Documentation/firmware) folder.
+
 ## Changelog
 
 A detailed changelog is available in the [Changelog.md](Changelog.md) file, documenting major updates and design revisions for each board.
