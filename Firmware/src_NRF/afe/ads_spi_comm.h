@@ -1,16 +1,15 @@
 /*
  * ----------------------------------------------------------------------
  *
- * File: pwr_bsp.h
+ * File: ads_spi_comm.h
  *
- * Last edited: 19.06.2024
+ * Last edited: 23.07.2025
  *
- * Copyright (C) 2024, ETH Zurich and University of Bologna.
+ * Copyright (C) 2025, ETH Zurich
  *
  * Authors:
- * - Philipp Schilk (schilkp@ethz.ch), ETH Zurich
- * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
  * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ *
  * ----------------------------------------------------------------------
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -26,25 +25,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef PWR_BSP_H_
-#define PWR_BSP_H_
 
-#include <stdbool.h> // Defines bool
-#include <stdint.h>  // Defines uint32_t, uint8_t, etc.
+#ifndef ADS_SPI_COMM_H
+#define ADS_SPI_COMM_H
+
+#include <stdint.h>
+#include "afe/ads_appl.h"
+
+/*==============================================================================
+ * Function Declarations - Low-Level SPI Transfers
+ *============================================================================*/
 
 /**
- * @brief Initialise all the pwr hardware interface.
- * @return negative on error, 0 otherwise
+ * @brief Perform SPI read transaction with command
  */
-int pwr_bsp_init();
+int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id);
 
 /**
- * @brief Configure all the pwr switches.
- * @return negative on error, 0 otherwise
+ * @brief Read ADC sample data in continuous mode
  */
-int pwr_bsp_start();
-int pwr_charge_enable();
+int ads1298_read_samples(uint8_t *data, uint8_t size, ads_device_id_t ads_id);
 
-extern bool flag_isr_soft_reset;
+/**
+ * @brief Write command or register data to ADS1298
+ */
+int ads1298_write_spi(uint8_t size, ads_device_id_t ads_id);
 
-#endif /* PWR_BSP_H_ */
+#endif // ADS_SPI_COMM_H

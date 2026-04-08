@@ -1,0 +1,54 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/*
+ * Copyright (c) 2025 ETH Zurich and University of Bologna
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Device tree overlay for PDM microphone
+ *
+ * Connect your PDM microphone as follows:
+ *   - CLK: P1.11 (microphone clock input)
+ *   - DATA: P0.12 (microphone data output)
+ *   - VDD: 1.8V or 3.3V (depending on your microphone)
+ *   - GND: Ground
+ */
+
+&clock {
+    hfclkaudio-frequency = <12288000>;
+};
+
+&pinctrl {
+    pdm_default: pdm_default {
+        group1 {
+            psels = <NRF_PSEL(PDM_CLK, 0, 04)>,
+                    <NRF_PSEL(PDM_DIN, 0, 12)>;
+        };
+    };
+};
+
+dmic_dev: &pdm0 {
+    status = "okay";
+    pinctrl-0 = <&pdm_default>;
+    pinctrl-names = "default";
+    clock-source = "ACLK";
+};
+
+// /*
+//  * Inter-board synchronization GPIO
+//  *
+//  * Connect between boards:
+//  *   - PRIMARY board: P0.05 (output)
+//  *   - SECONDARY board: P0.05 (input)
+//  *   - Common GND between boards
+//  *
+//  * Change the pin number if P0.05 is not available on your hardware.
+//  */
+// / {
+//     sync {
+//         compatible = "gpio-keys";
+//         gpio_board_sync: gpio_board_sync {
+//             gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+//             label = "Board Sync Pin";
+//         };
+//     };
+// };

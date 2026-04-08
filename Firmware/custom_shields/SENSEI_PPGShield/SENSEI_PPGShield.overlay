@@ -1,0 +1,15 @@
+/*
+ * Copyright (c) 2022 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
+
+
+
+&i2c1 {
+    max86150ppg: max86150ppg@5e{
+        compatible = "i2c-device";
+        reg = < 0x5e >;
+        label = "MAX86150_PPG";
+    };
+};

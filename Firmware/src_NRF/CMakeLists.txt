@@ -16,35 +16,57 @@ if(NOT SENSEI_SDK_ROOT)
     message(FATAL_ERROR "SENSEI_SDK_ROOT is not defined")
 endif()
 
-
-#list(APPEND EXTRA_ZEPHYR_MODULES
-#    ${SENSEI_SDK_ROOT}/NRF
-#)
-
 list(APPEND EXTRA_ZEPHYR_MODULES
     ${SENSEI_SDK_ROOT}/NRF
 )
 
-
 # Configure the project
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(pmic_test)
-
-
+project(exg_stream)
 
 
 target_sources(app PRIVATE
+    # Entry point
     main.c
-    bluetooth.c
+
+    # Core
+    core/sync_streaming.c
+    core/i2c_helpers.c
+    core/board_sync.c
+
+    # BSP
     bsp/pwr_bsp.c
-    ble_appl.c
-    ads_appl.c
-    ads_spi.c
-    board_streaming.c
-    ppg_appl.c
-    i2c_helpers.c
-    lis2duxs12_sensor.c
-    lis2duxs12_reg.c
+    bsp/battery/battery.c
+    bsp/power/power.c
+    bsp/system_status/system_status.c
+
+    # AFE (Analog Front-End - ADS1298)
+    afe/ads_appl.c
+    afe/ads_spi_hw.c
+    afe/ads_spi_comm.c
+    afe/ads_spi_config.c
+    afe/ads_spi_data.c
+
+    # Sensors - IMU
+    sensors/imu/imu_appl.c
+    sensors/imu/lis2duxs12_sensor.c
+    sensors/imu/driver/lis2duxs12_reg.c
+
+    # Sensors - Microphone
+    sensors/mic/mic_appl.c
+
+    # Sensors - PPG
+    sensors/ppg/ppg_appl.c
+
+    # Sensors - EEG
+    sensors/eeg/eeg_appl.c
+
+    # Sensors - EMG
+    sensors/emg/emg_appl.c
+
+    # BLE
+    ble/ble_appl.c
+    ble/bluetooth.c
 )
 target_include_directories(app PRIVATE
     .

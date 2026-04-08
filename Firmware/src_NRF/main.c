@@ -3,12 +3,12 @@
  *
  * File: main.c
  *
- * Last edited: 23.07.2025
+ * Last edited: 30.10.2025
  *
- * Copyright (C) 2025, ETH Zurich
+ * Copyright (c) 2024 ETH Zurich and University of Bologna
  *
  * Authors:
- * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
  *
  * ----------------------------------------------------------------------
  * SPDX-License-Identifier: Apache-2.0
@@ -26,59 +26,43 @@
  * limitations under the License.
  */
 
-#include <stdio.h>
-#include <string.h>
-
-#include <zephyr/device.h>
-#include <zephyr/kernel.h>
-#include <zephyr/sys/ring_buffer.h>
-
-#include <zephyr/drivers/sensor.h>
-#include <zephyr/drivers/uart.h>
-
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
-
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
-
+#include <zephyr/sys/ring_buffer.h>
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/usb/usbd.h>
 
-#include <zephyr/kernel.h>
-
-#include "pwr/pwr.h"
 #include "bsp/pwr_bsp.h"
+#include "pwr/pwr.h"
 #include "pwr/pwr_common.h"
-#include "pwr/thread_pwr.h"
+#include "max77654.h"
 
-#include "common.h"
-#include "ble_appl.h"
-#include "ads_appl.h"
-#include "ads_spi.h"
-#include "board_streaming.h"
-#include "ppg_appl.h"
+#include "afe/ads_spi.h"
+#include "ble/ble_appl.h"
+#include "core/common.h"
+#include "sensors/imu/imu_appl.h"
+#include "sensors/mic/mic_appl.h"
+#include "sensors/eeg/eeg_appl.h"
 
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
+// Inter-board hardware synchronization
+#include "core/board_sync.h"
 
-#include "lis2duxs12_sensor.h"
+static const struct device *const uart_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 
-#include <zephyr/devicetree.h>
-#include <zephyr/drivers/gpio.h>
-
-LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
-
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #define UART_BUF_SIZE 40
 #define MINIMAL_STACK_SIZE 1024
-
-// Add after other defines
-#define STATE_MACHINE_STACK_SIZE 2048
-#define STATE_MACHINE_PRIORITY 7
-
 
 struct uart_data_t {
   void *fifo_reserved;
@@ -86,158 +70,121 @@ struct uart_data_t {
   uint16_t len;
 };
 
-
-void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf)
-{
-    LOG_INF("Fatal error occurred: %d", reason);
-    while (1) {
-        // Halt here for debugging 
-    }
+void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
+  LOG_INF("Fatal error occurred: %d", reason);
+  while (1) {
+    // Halt here for debugging
+  }
 }
 
+int main(void) {
+  int ret = 0;
 
-// Function pointers for state behavior
-typedef void (*StateFuncEntry)(void);
-typedef void (*StateFuncRun)(void);
-typedef void (*StateFuncExit)(void);
+  LOG_INIT();
 
-// State structure
-typedef struct {
-    StateFuncEntry entry;
-    StateFuncRun run;
-    StateFuncExit exit;
-} StateMachine_t;
-
-// Global variable to track the current state
-static State_t current_state = S_LOW_POWER_CONNECTED; // Set initial state
+  LOG_INF("LED Test on %s", CONFIG_BOARD);
 
 
+  if (pwr_init()) {
+    LOG_ERR("PWR Init failed!");
+  }
+  // pwr_start();
+  if (pwr_bsp_start()) {
+    LOG_ERR("PWR BSP Start failed!");
+  }
 
-// ==================== State Functions ====================
+  if (!device_is_ready(uart_dev)) {
+    LOG_ERR("CDC ACM device not ready");
+    return 0;
+  }
 
-// S_SHUTDOWN
-static void s_shutdown_entry(void) { LOG_INF("Entering SHUTDOWN state"); }
-static void s_shutdown_run(void) { /* Logic for shutdown */ }
-static void s_shutdown_exit(void) { LOG_INF("Exiting SHUTDOWN state"); }
+  if (usb_enable(NULL)) {
+    return 0;
+  }
+  LOG_INF("USB enabled");
 
-// S_DEEPSLEEP
-static void s_deepsleep_entry(void) { LOG_INF("Entering DEEPSLEEP state"); }
-static void s_deepsleep_run(void) { /* Logic for deep sleep */ }
-static void s_deepsleep_exit(void) { LOG_INF("Exiting DEEPSLEEP state"); }
-
-// S_LOW_POWER_CONNECTED
-static void s_low_power_connected_entry(void) { LOG_INF("Entering LOW POWER CONNECTED state"); }
-static void s_low_power_connected_run(void) { /* Logic for low power */ }
-static void s_low_power_connected_exit(void) { LOG_INF("Exiting LOW POWER CONNECTED state"); }
-
-// S_NORDIC_STREAM
-static void s_nordic_stream_entry(void) { 
-  
-  // Depending on the ExG shield to use...
-  //pwr_ads_on_bipolar();
-  pwr_ads_on_unipolar();
-}
-static void s_nordic_stream_run(void) {
-  loop_streaming();
-}
-static void s_nordic_stream_exit(void) { 
-  //LOG_INF("Exiting NORDIC STREAM state"); 
-  pwr_ads_off();
-}
-
-// S_GAP_CTRL
-static void s_gap_ctrl_entry(void) { LOG_INF("Entering GAP CTRL state"); }
-static void s_gap_ctrl_run(void) { /* BLE control logic */ }
-static void s_gap_ctrl_exit(void) { LOG_INF("Exiting GAP CTRL state"); }
-
-// ==================== State Machine Definition ====================
-static const StateMachine_t state_machine[S_MAX_STATES] = {
-    {s_shutdown_entry, s_shutdown_run, s_shutdown_exit},
-    {s_deepsleep_entry, s_deepsleep_run, s_deepsleep_exit},
-    {s_low_power_connected_entry, s_low_power_connected_run, s_low_power_connected_exit},
-    {s_nordic_stream_entry, s_nordic_stream_run, s_nordic_stream_exit},
-    {s_gap_ctrl_entry, s_gap_ctrl_run, s_gap_ctrl_exit}
-};
-
-
-// set state machine state
-void set_SM_state(State_t new_state) {
-    if (new_state < S_MAX_STATES) {
-        state_machine[current_state].exit(); // Call exit function of current state
-        current_state = new_state;           // Update current state
-        state_machine[current_state].entry(); // Call entry function of new state
-    } else {
-        LOG_ERR("Invalid state: %d", new_state);
-    }
-}
-
-// Get current state
-State_t get_SM_state(void) {
-    return current_state; // Return the current state
-}
-
-
-#define LOG_MODULE_NAME peripheral_uart
-
-
-// Add state machine synchronization
-static K_SEM_DEFINE(state_machine_ready_sem, 0, 1);
-
-// Add state machine thread function
-static void state_machine_thread(void *arg1, void *arg2, void *arg3)
-{
-    // Wait for initialization to complete
-    LOG_INF("State machine thread wants to start");
-    k_sem_take(&state_machine_ready_sem, K_FOREVER);
-    LOG_INF("State machine thread started");
-
-    while (1) {
-        state_machine[current_state].run();
-        //k_msleep(1);  // Run every second
-        k_cpu_idle();  // Use idle instead of sleep to stay responsive
-    }
-}
-
-K_THREAD_DEFINE(state_machine_thread_id, 
-  STATE_MACHINE_STACK_SIZE, 
-  state_machine_thread, 
-  NULL, NULL, NULL, 
-  STATE_MACHINE_PRIORITY, 0, 0);
-
-
-
-  static uint32_t red = 0;
-  static uint32_t ir = 0;
-
-
-int main(void)
-{
-  int32_t ret;
-
-  pwr_init();
-  pwr_start();
-
-  init_lis2duxs12();
-
+  LOG_INF("Enabling charge...");
   pwr_charge_enable();
-  ret = ADS_dr_init();
-  pwr_ads_on_unipolar();
-  
-  init_SPI();
+  LOG_INF("Initializing ADS...");
+  ret = ads_dr_init();
 
-  
+  LOG_INF("Initializing SPI...");
+  init_spi();
+
+  LOG_INF("Powering GAP9...");
+  gap9_pwr(true);
+  LOG_INF("GAP9 powered up");
+
   struct uart_data_t *buf = k_malloc(sizeof(*buf));
-  init_ble_comm();
+  LOG_INF("Starting BLE adverts...");
   start_bluetooth_adverts();
 
+  // Initialize microphone
+  LOG_INF("Initializing microphone...");
+  if (mic_init() != 0) {
+    LOG_WRN("Microphone initialization failed - mic streaming disabled");
+  } else {
+    LOG_INF("Microphone initialized");
+  }
 
+  // Initialize IMU (LIS2DUXS12 accelerometer)
+  LOG_INF("Initializing IMU...");
+  if (imu_init() != 0) {
+    LOG_WRN("IMU initialization failed - IMU streaming disabled");
+  } else {
+    LOG_INF("IMU initialized");
+  }
 
-  // Signal state machine can start
-  k_sem_give(&state_machine_ready_sem);
+#if defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
+  // Initialize EEG subsystem
+  LOG_INF("Initializing EEG subsystem...");
+  if (eeg_init() != 0) {
+    LOG_WRN("EEG initialization failed - EEG streaming disabled");
+  } else {
+    LOG_INF("EEG subsystem initialized");
+  }
+#endif
+
+#if defined(CONFIG_SENSOR_EMG) && !defined(CONFIG_SENSOR_EEG)
+  // Initialize EMG subsystem
+  LOG_INF("Initializing EMG subsystem...");
+  if (emg_init() != 0) {
+    LOG_WRN("EMG initialization failed - EMG streaming disabled");
+  } else {
+    LOG_INF("EMG subsystem initialized");
+  }
+#endif
+
+  // Initialize inter-board synchronization
+  LOG_INF("Initializing board sync...");
+  if (board_sync_init() != 0) {
+    LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+  } else {
+    LOG_INF("Board sync initialized");
+  }
 
   while (1) {
-      k_msleep(1000);  // Main thread can sleep now, all the work is handeled by other threads
+    k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
+    if (flag_isr_soft_reset) {
+      // Soft reset the device
+      // Put PMIC into factory reset
+      // do a nop in a busy for loop for 100ms to allow the PMIC to process the command
+      volatile int i;
+      for (i = 0; i < 10000000; i++) {
+        __asm__ volatile("nop");
+      }
+
+      int ret = max77654_factory_ship_mode(&pmic_h);
+      if (ret != 0) {
+        LOG_ERR("Failed to soft reset PMIC (error %d)", ret);
+      } else {
+        LOG_INF("PMIC soft reset triggered");
+      }
+      flag_isr_soft_reset = 0;
+      for (i = 0; i < 10000000; i++) {
+        __asm__ volatile("nop");
+      }
+    }
   }
   return 0;
 }
-
