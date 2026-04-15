@@ -200,6 +200,13 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
           ble_packet[1] = (uint8_t)(packet_counter & 0xFF);
           ble_packet[2] = (uint8_t)((packet_counter >> 8) & 0xFF);
 
+          /* Add timestamp (microseconds) for synchronization */
+          uint32_t timestamp_us = k_cyc_to_us_floor32(k_cycle_get_32());
+          ble_packet[3] = (uint8_t)(timestamp_us & 0xFF);
+          ble_packet[4] = (uint8_t)((timestamp_us >> 8) & 0xFF);
+          ble_packet[5] = (uint8_t)((timestamp_us >> 16) & 0xFF);
+          ble_packet[6] = (uint8_t)((timestamp_us >> 24) & 0xFF);
+          
           ble_packet[MIC_PCKT_SIZE - 1] = MIC_DATA_TRAILER;
 
           /* Send via BLE queue */
