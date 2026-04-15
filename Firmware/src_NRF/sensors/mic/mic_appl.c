@@ -187,8 +187,8 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
         int samples_remaining_in_packet = MIC_SAMPLES_PER_PACKET - packet_sample_offset;
         int samples_to_copy = MIN(samples_remaining_in_packet, num_samples - sample_idx);
 
-        /* Copy samples to packet (offset by 3 for header + counter) */
-        memcpy(&ble_packet[3 + (packet_sample_offset * MIC_BYTES_PER_SAMPLE)], &samples[sample_idx],
+        /* Copy samples to packet (offset by 7 for header + counter + timestamp) */
+        memcpy(&ble_packet[7 + (packet_sample_offset * MIC_BYTES_PER_SAMPLE)], &samples[sample_idx],
                samples_to_copy * MIC_BYTES_PER_SAMPLE);
 
         packet_sample_offset += samples_to_copy;
