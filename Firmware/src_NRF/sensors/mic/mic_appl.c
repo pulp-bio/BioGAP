@@ -51,9 +51,9 @@ LOG_MODULE_REGISTER(mic_appl, LOG_LEVEL_INF);
  * Private Definitions
  *============================================================================*/
 
-/* Size of a block for 10 ms of audio data (reduced from 100ms for better interleaving) */
+/* Size of a block for 4ms ms of audio data */
 #define BLOCK_SIZE(_sample_rate, _number_of_channels)                                                                  \
-  (MIC_BYTES_PER_SAMPLE * ((_sample_rate) / 10) * (_number_of_channels))
+  (MIC_BYTES_PER_SAMPLE * ((_sample_rate) / 250) * (_number_of_channels))
 
 /* Maximum block size based on max sample rate and stereo */
 #define MAX_BLOCK_SIZE BLOCK_SIZE(MIC_MAX_SAMPLE_RATE, 2)
