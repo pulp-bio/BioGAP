@@ -51,9 +51,9 @@ LOG_MODULE_REGISTER(mic_appl, LOG_LEVEL_INF);
  * Private Definitions
  *============================================================================*/
 
-/* Size of a block for 10 ms of audio data (reduced from 100ms for better interleaving) */
+/* Size of a block for 4ms ms of audio data */
 #define BLOCK_SIZE(_sample_rate, _number_of_channels)                                                                  \
-  (MIC_BYTES_PER_SAMPLE * ((_sample_rate) / 10) * (_number_of_channels))
+  (MIC_BYTES_PER_SAMPLE * ((_sample_rate) / 250) * (_number_of_channels))
 
 /* Maximum block size based on max sample rate and stereo */
 #define MAX_BLOCK_SIZE BLOCK_SIZE(MIC_MAX_SAMPLE_RATE, 2)
@@ -187,8 +187,8 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
         int samples_remaining_in_packet = MIC_SAMPLES_PER_PACKET - packet_sample_offset;
         int samples_to_copy = MIN(samples_remaining_in_packet, num_samples - sample_idx);
 
-        /* Copy samples to packet (offset by 3 for header + counter) */
-        memcpy(&ble_packet[3 + (packet_sample_offset * MIC_BYTES_PER_SAMPLE)], &samples[sample_idx],
+        /* Copy samples to packet (offset by 7 for header + counter + timestamp) */
+        memcpy(&ble_packet[7 + (packet_sample_offset * MIC_BYTES_PER_SAMPLE)], &samples[sample_idx],
                samples_to_copy * MIC_BYTES_PER_SAMPLE);
 
         packet_sample_offset += samples_to_copy;
@@ -200,6 +200,13 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
           ble_packet[1] = (uint8_t)(packet_counter & 0xFF);
           ble_packet[2] = (uint8_t)((packet_counter >> 8) & 0xFF);
 
+          /* Add timestamp (microseconds) for synchronization */
+          uint32_t timestamp_us = k_cyc_to_us_floor32(k_cycle_get_32());
+          ble_packet[3] = (uint8_t)(timestamp_us & 0xFF);
+          ble_packet[4] = (uint8_t)((timestamp_us >> 8) & 0xFF);
+          ble_packet[5] = (uint8_t)((timestamp_us >> 16) & 0xFF);
+          ble_packet[6] = (uint8_t)((timestamp_us >> 24) & 0xFF);
+          
           ble_packet[MIC_PCKT_SIZE - 1] = MIC_DATA_TRAILER;
 
           /* Send via BLE queue */
