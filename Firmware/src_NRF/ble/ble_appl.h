@@ -30,6 +30,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "core/command_dispatcher.h"
 
 // BLE application definitions
 /* Define message queue sizes (number of messages) */
@@ -50,7 +51,7 @@ typedef struct {
   uint8_t data[BLE_PCKT_MAX_SIZE]; // Packet data buffer
 } ble_packet_t;
 
-#include "ble/ble_commands.h"
+//#include "ble/ble_commands.h"
 
 /**
  * @brief BLE NUS received data structure
@@ -79,7 +80,7 @@ extern struct k_sem ble_data_received;
 
 // Function prototypes
 void init_ble_comm(void);
-void add_data_to_send_buffer(uint8_t *data, uint16_t size);
+void add_data_to_ble_send_buffer(uint8_t *data, uint16_t size);
 void add_data_to_receive_buffer(uint8_t *data);
 
 #endif // BLE_APPL_H

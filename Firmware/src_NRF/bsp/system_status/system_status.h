@@ -25,23 +25,23 @@
 int system_status_init(void);
 
 /**
- * @brief Build a BLE response packet for the system status.
+ * @brief Build a connectivity response packet for the system status.
  * 
- * Aggregates battery and sensor information into a format suitable for BLE transmission.
+ * Aggregates battery and sensor information into a format suitable for connectivity transmission.
  * 
  * @param buffer Pointer to the buffer where the packet will be built.
  * @param buf_size Size of the buffer.
  * @param out_len Pointer to store the resulting packet length.
  * @return 0 on success, negative on error (e.g., buffer too small).
  */
-int system_status_build_ble_packet(uint8_t *buffer, size_t buf_size, size_t *out_len);
+int system_status_build_packet(uint8_t *buffer, size_t buf_size, size_t *out_len);
 
 /*==============================================================================
  * Device Information Functions
  *============================================================================*/
 
 /**
- * @brief Send hardware version over BLE.
+ * @brief Send hardware version over connectivity.
  * 
  * Packet format: [REQUEST_HARDWARE_VERSION, HARDWARE_VERSION, HARDWARE_REVISION, BLE_PCK_TAILER]
  */

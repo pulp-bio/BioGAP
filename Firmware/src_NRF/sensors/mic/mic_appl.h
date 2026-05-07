@@ -81,10 +81,11 @@
  * Total MIC BLE packet size: 132 bytes
  * - Header: 1 byte
  * - Counter: 2 bytes
+ * - Timestamp: 4 bytes
  * - Audio data: 128 bytes (64 samples × 2 bytes)
  * - Trailer: 1 byte
  */
-#define MIC_PCKT_SIZE (1 + 2 + MIC_AUDIO_PAYLOAD_SIZE + 1)
+#define MIC_PCKT_SIZE (1 + 2 + 4 + MIC_AUDIO_PAYLOAD_SIZE + 1)
 
 /*==============================================================================
  * Type Definitions

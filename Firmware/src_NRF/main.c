@@ -115,9 +115,16 @@ int main(void) {
   gap9_pwr(true);
   LOG_INF("GAP9 powered up");
 
-  struct uart_data_t *buf = k_malloc(sizeof(*buf));
-  LOG_INF("Starting BLE adverts...");
-  start_bluetooth_adverts();
+  #ifndef CONFIG_WI_FI
+    LOG_INF("Wi-Fi disabled - start BLE advertising");
+    struct uart_data_t *buf = k_malloc(sizeof(*buf));
+    LOG_INF("Starting BLE adverts...");
+    start_bluetooth_adverts();
+    
+  #else
+    LOG_INF("Initializing Wi-Fi...");
+    // TODO: Implement Wi-Fi initialization procedure (will be handled by the ESP Wi-Fi shied)
+  #endif
 
   // Initialize microphone
   LOG_INF("Initializing microphone...");

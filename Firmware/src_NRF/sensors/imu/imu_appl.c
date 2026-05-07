@@ -143,7 +143,11 @@ static void imu_packet_add_sample(int16_t x, int16_t y, int16_t z) {
     imu_tx_buf[imu_buf_idx++] = IMU_DATA_TRAILER;
 
     /* Send packet via BLE queue */
-    add_data_to_send_buffer(imu_tx_buf, IMU_PCKT_SIZE);
+    #ifndef CONFIG_WI_FI
+      add_data_to_ble_send_buffer(imu_tx_buf, imu_buf_idx);
+    #else
+        // To do: Handle Transmission to the Wi-Fi shield module  
+    #endif
 
     /* Reset for next packet */
     imu_packet_init();

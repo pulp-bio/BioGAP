@@ -19,7 +19,7 @@
  *
  * www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
+ * Unless required by applicable law or agreed to in wmayveriting, software
  * distributed under the License is distributed on an AS IS BASIS, WITHOUT
  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
@@ -157,7 +157,7 @@ volatile bool ads_to_read = ADS1298_A;
 /**
  * @brief SPI interrupt handler continuation
  *
- * Processes received data and constructs BLE packets from ADS/PPG data.
+ * Processes received data from the ADS and constructs either BLE or Wi-Fi packets from ADS/PPG data.
  * Called from the SPIM hardware interrupt handler.
  */
 void ads_spim_handler_done(void) {
@@ -191,7 +191,7 @@ void ads_spim_handler_done(void) {
     if (ads_to_read == ADS1298_B) {
       //  Set packet identifier to EEG all channels + PPG inactive
       ble_tx_buf[tx_buf_inx++] = counter_extra; // add here your custom data for each sample.
-      ble_tx_buf[tx_buf_inx++] = 0x00; // Reserved byte for future use
+      ble_tx_buf[tx_buf_inx++] = 0x00;          // Reserved byte for future use
     }
 
     if (tx_buf_inx == EXG_SAMPLE_DATA_END) {
@@ -231,7 +231,11 @@ void ads_spim_handler_done(void) {
         // BLE PCK tail
         ble_tx_buf[buf_current_size++] = BLE_PCK_TAILER;
 
-        add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
+        #ifndef CONFIG_WI_FI
+            add_data_to_ble_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
+        #else
+        /* TODO: send via WiFi transport */
+        #endif
       }
     }
 

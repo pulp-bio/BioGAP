@@ -60,6 +60,19 @@ config SENSOR_EEG
 	  Enable support for EEG sensor. This will include the necessary drivers,
 	  state machine states, and data processing for EEG data acquisition.
 
+config WI_FI
+	bool "WiFi data transmission"
+	default n
+	help
+	  Enable support for WiFi data transmission using the Wi-Fi shield (ESP32-C6 based). 
+	  This will disable the BLE connectivity on the NRF and use WiFi for sending data to the BIOGUI instead.
+
+config SD_CARD
+	bool "SD card support"
+	default n
+	help
+	  Enable support for SD card data storage. SD CARD/Wi-Fi shield must be connected to the mainboard. 
+
 menu "State Machine Configuration"
 
 config STATE_MACHINE_USE_CPU_IDLE

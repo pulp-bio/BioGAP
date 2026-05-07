@@ -31,6 +31,7 @@ target_sources(app PRIVATE
 
     # Core
     core/sync_streaming.c
+    core/command_dispatcher.c
     core/i2c_helpers.c
     core/board_sync.c
 

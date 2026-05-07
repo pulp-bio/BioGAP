@@ -1,14 +1,15 @@
 /*
  * ----------------------------------------------------------------------
  *
- * File: ble_commands.h
+ * File: connectivity_commands.h
  *
- * Last edited: 06.01.2026
+ * Last edited: 07.05.2026
  *
  * Copyright (C) 2026, ETH Zurich
  *
  * Authors:
  * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
  *
  * ----------------------------------------------------------------------
  * SPDX-License-Identifier: Apache-2.0
@@ -26,19 +27,19 @@
  * limitations under the License.
  */
 
-#ifndef BLE_COMMANDS_H
-#define BLE_COMMANDS_H
+#ifndef CONNECTIVITY_COMMANDS_H
+#define CONNECTIVITY_COMMANDS_H
 
 /**
- * @file ble_commands.h
- * @brief BLE Protocol Command Definitions
+ * @file connectivity_commands.h
+ * @brief Connectivity Protocol Command Definitions
  *
- * This header defines the command codes used in the BLE communication
+ * This header defines the command codes used in the connectivity communication
  * protocol between the SENSEI board and the host application.
  */
 
 /*==============================================================================
- * BLE Command Codes
+ * Connectivity Command Codes
  *============================================================================*/
 
 #define GET_DEVICE_SETTINGS 13
@@ -68,4 +69,4 @@
 #define START_EMG_STREAMING 37
 #define STOP_EMG_STREAMING 38
 
-#endif // BLE_COMMANDS_H
+#endif // CONNECTIVITY_COMMANDS_H
