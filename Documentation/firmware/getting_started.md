@@ -35,10 +35,11 @@ cd BioGAP
 
 # Adapting the SENSEI-SDK for BioGAP
 
-The cloned SENSEI-SDK is not ready to be used for the BioGAP firmware. For this reason, inside this repository, under `Firmware/` you will find two folders: 
+The cloned SENSEI-SDK is not ready to be used for the BioGAP firmware.
+For this reason, inside this repository, under `Firmware/` you will find two folders: 
 
 - `custom_dts`: Contains a custom file for the Analog Front-End (AFE)
-- `custom_shields`: Contains the custom shield definitions for the ExG (EEG/EMG) and PPG sensors.
+- `custom_shields`: Contains the custom shield definitions for the ExG (EEG/EMG), PPG and Wi-Fi/SD sensors.
 
 You need to copy the content of these two folders into the corresponding folders in the `sensei-sdk` repository.
 
@@ -147,3 +148,37 @@ After these modifications, the SENSEI-SDK should be ready to be used for buildin
 
 Once everything is set up, you can build the firmware. The instruction are exactly the same as the one provided in the [SENSEI-SDK repository](https://github.com/pulp-bio/sensei-sdk).
 
+## Adjusting Paths
+You need to export the environment variable SENSEI_SDK_ROOT
+
+In Windows (Powershell):
+
+```bash
+cd sensei-sdk
+pwd 
+```
+This will output the path of your sensei-sdk directory
+
+copy the path and then export the environment variable.
+
+```bash
+[Environment]::SetEnvironmentVariable("SENSEI_SDK_ROOT", "C:\Users\giusy\OneDrive\Desktop\BIOGAP\sensei-sdk", "User")
+```
+Then close and reopen PowerShell / VS Code.
+
+After reopening, check that the environment export was successfull. 
+
+```bash
+echo $env:SENSEI_SDK_ROOT
+```
+
+## Using VS Code Connect APP
+
+1. Use the "Open an existing application" to open BioGAP/firmware/src_NRF. Important: you must open first the sensei-sdk folder in VS code and open the extension from there. 
+2. In the "Applications" tab of the nRF Connect SDK extension, select the newly added application and click on "Add build configuration".
+3. In the new window under "CMakePreset", select "Build for NRF5340 SENSEIV1C APP (build)"
+// and select v2.6.1 as SDK version and v2.9.1 as Toolchain version
+Note: Newer version of SDK and Toolchain are currently not supported. 
+4. Select "nrf5340_senseiv1_cpuapp" as Board Target. If not recognized, it means you are in the wrong workspace. 
+5. Click on "Generate and Build" to build the application.
+In the "Actions" tab click on "Flash" to flash the application to the board.
