@@ -81,6 +81,23 @@ int power_ads_on_unipolar(void) {
     return 0;
 }
 
+
+
+int power_wifi_on(void) {
+    struct max77654_conf *pmic_conf = &pmic_h.conf;
+
+    pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[2].active_discharge = true;
+    pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
+
+    max77654_config(&pmic_h);
+
+    return 0;
+}
+
+
 int power_ads_on_bipolar(void) {
     struct max77654_conf *pmic_conf = &pmic_h.conf;
 

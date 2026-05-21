@@ -59,7 +59,7 @@ extern bool ads_initialized;
  *
  * @note Must be called before any other ADS functions
  */
-void init_spi();
+void init_ads_spi();
 
 /*==============================================================================
  * Function Declarations - Data Acquisition Control

@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 # Enable shields
-set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield")
+set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield SENSEI_WiFi_SD_Shield")
 
 set(CONF_FILE prj.conf)
 set(OVERLAY_CONFIG "child_image/hci_ipc.conf")
@@ -68,6 +68,11 @@ target_sources(app PRIVATE
     # BLE
     ble/ble_appl.c
     ble/bluetooth.c
+
+    # Wi-Fi and SD shield
+    wifi_sd_shield/wifi_sd_shield_appl.c
+    wifi_sd_shield/wifi_sd_shield_inits.c
+    wifi_sd_shield/wifi_sd_spi_functions.c
 )
 target_include_directories(app PRIVATE
     .

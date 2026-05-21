@@ -57,6 +57,11 @@
 // Inter-board hardware synchronization
 #include "core/board_sync.h"
 
+#if defined(CONFIG_WI_FI)
+  #include "wifi_sd_shield/wifi_sd_shield_inits.h"
+  #include "wifi_sd_shield/wifi_sd_shield_defs.h"
+#endif
+
 static const struct device *const uart_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
@@ -81,11 +86,12 @@ int main(void) {
   int ret = 0;
 
   LOG_INIT();
+  LOG_INF("Starting main application");
 
   LOG_INF("LED Test on %s", CONFIG_BOARD);
 
 
-  if (pwr_init()) {
+  if (pwr_init()) {       // passed 
     LOG_ERR("PWR Init failed!");
   }
   // pwr_start();
@@ -93,82 +99,111 @@ int main(void) {
     LOG_ERR("PWR BSP Start failed!");
   }
 
-  if (!device_is_ready(uart_dev)) {
-    LOG_ERR("CDC ACM device not ready");
-    return 0;
-  }
+//   if (!device_is_ready(uart_dev)) {
+//     LOG_ERR("CDC ACM device not ready");
+//     return 0;
+//   }
 
-  if (usb_enable(NULL)) {
-    return 0;
-  }
-  LOG_INF("USB enabled");
+//   if (usb_enable(NULL)) {
+//     return 0;
+//   }
+//   LOG_INF("USB enabled");
 
-  LOG_INF("Enabling charge...");
-  pwr_charge_enable();
-  LOG_INF("Initializing ADS...");
-  ret = ads_dr_init();
+//   LOG_INF("Enabling charge...");
+//   pwr_charge_enable();
 
-  LOG_INF("Initializing SPI...");
-  init_spi();
+//   #if defined(CONFIG_SENSOR_EEG) || defined(CONFIG_SENSOR_EMG)
+//     LOG_INF("Initializing ADS...");
+//     ret = ads_dr_init();
+//     LOG_INF("Initializing SPI for ADS...");
+//     init_ads_spi();
+//   #endif 
 
-  LOG_INF("Powering GAP9...");
-  gap9_pwr(true);
-  LOG_INF("GAP9 powered up");
+//   LOG_INF("Powering GAP9...");
+//   gap9_pwr(true);
+//   LOG_INF("GAP9 powered up");
+//   LOG_INF("Initializing Connectivity...");
+#if defined (CONFIG_WI_FI)
 
-  #ifndef CONFIG_WI_FI
-    LOG_INF("Wi-Fi disabled - start BLE advertising");
+    LOG_INF("Initializing Wi-Fi...");
+    //Power on VD2 --> removed for now, as USB is used 
+    // power_wifi_on(); 
+    // Initialize GPIOs for WiFi and SD card shield 
+    ret = gpios_wifi_sd_card_shield_init();
+    if (ret != 0) {
+      LOG_ERR("Wi-Fi shield GPIO initialization failed");
+    }
+    // Initialize SPI-B for communication with Wi-Fi shield (ESP32-C6)
+    ret = init_spi_b_wifi_sd_card_shield();
+    if (ret != 0) {
+      LOG_ERR("Wi-Fi shield SPI initialization failed");
+    }
+    ret = initial_handshake_nrf_esp();
+    if (ret != 0) {
+      LOG_ERR("Initial handshake with ESP32 failed - Wi-Fi communication not established");
+    }
+    else{
+      LOG_INF("Wi-Fi - SD shield initialized");
+    }
+  #else    
+    LOG_INF("Starting BLE advertising");
     struct uart_data_t *buf = k_malloc(sizeof(*buf));
     LOG_INF("Starting BLE adverts...");
     start_bluetooth_adverts();
-    
-  #else
-    LOG_INF("Initializing Wi-Fi...");
-    // TODO: Implement Wi-Fi initialization procedure (will be handled by the ESP Wi-Fi shied)
   #endif
 
-  // Initialize microphone
-  LOG_INF("Initializing microphone...");
-  if (mic_init() != 0) {
-    LOG_WRN("Microphone initialization failed - mic streaming disabled");
-  } else {
-    LOG_INF("Microphone initialized");
-  }
+//   #if defined(CONFIG_ONBOARD_MIC)
+//     // Initialize microphone
+//     LOG_INF("Initializing microphone...");
+//     if (mic_init() != 0) {
+//       LOG_WRN("Microphone initialization failed - mic streaming disabled");
+//     } else {
+//       LOG_INF("Microphone initialized");
+//     }
+//   #endif
+  
 
-  // Initialize IMU (LIS2DUXS12 accelerometer)
-  LOG_INF("Initializing IMU...");
-  if (imu_init() != 0) {
-    LOG_WRN("IMU initialization failed - IMU streaming disabled");
-  } else {
-    LOG_INF("IMU initialized");
-  }
+//   #if defined(CONFIG_ONBOARD_IMU)
+//     // Initialize IMU (LIS2DUXS12 accelerometer)
+//     LOG_INF("Initializing IMU...");
+//     if (imu_init() != 0) {
+//       LOG_WRN("IMU initialization failed - IMU streaming disabled");
+//     } else {
+//       LOG_INF("IMU initialized");
+//     }
+//   #endif 
 
-#if defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
-  // Initialize EEG subsystem
-  LOG_INF("Initializing EEG subsystem...");
-  if (eeg_init() != 0) {
-    LOG_WRN("EEG initialization failed - EEG streaming disabled");
-  } else {
-    LOG_INF("EEG subsystem initialized");
-  }
-#endif
+// #if defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
+//   // Initialize EEG subsystem
+//   LOG_INF("Initializing EEG subsystem...");
+//   if (eeg_init() != 0) {
+//     LOG_WRN("EEG initialization failed - EEG streaming disabled");
+//   } else {
+//     LOG_INF("EEG subsystem initialized");
+//   }
+// #endif
 
-#if defined(CONFIG_SENSOR_EMG) && !defined(CONFIG_SENSOR_EEG)
-  // Initialize EMG subsystem
-  LOG_INF("Initializing EMG subsystem...");
-  if (emg_init() != 0) {
-    LOG_WRN("EMG initialization failed - EMG streaming disabled");
-  } else {
-    LOG_INF("EMG subsystem initialized");
-  }
-#endif
+// #if defined(CONFIG_SENSOR_EMG) && !defined(CONFIG_SENSOR_EEG)
+//   // Initialize EMG subsystem
+//   LOG_INF("Initializing EMG subsystem...");
+//   if (emg_init() != 0) {
+//     LOG_WRN("EMG initialization failed - EMG streaming disabled");
+//   } else {
+//     LOG_INF("EMG subsystem initialized");
+//   }
+// #endif
 
-  // Initialize inter-board synchronization
-  LOG_INF("Initializing board sync...");
-  if (board_sync_init() != 0) {
-    LOG_WRN("Board sync initialization failed - inter-board sync disabled");
-  } else {
-    LOG_INF("Board sync initialized");
-  }
+//   // Initialize inter-board synchronization
+//   LOG_INF("Initializing board sync...");
+//   if (board_sync_init() != 0) {
+//     LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+//   } else {
+//     LOG_INF("Board sync initialized");
+//   }
+
+  // while(1){
+  //   k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
+  // }
 
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads

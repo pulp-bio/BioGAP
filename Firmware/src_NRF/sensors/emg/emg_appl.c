@@ -102,8 +102,9 @@ static void emg_streaming_thread(void *arg1, void *arg2, void *arg3);
  * Thread Definition
  *============================================================================*/
 
-K_THREAD_DEFINE(emg_thread_id, EMG_THREAD_STACK_SIZE, emg_streaming_thread, NULL, NULL, NULL, EMG_THREAD_PRIORITY, 0, 0);
-
+ #if defined(CONFIG_SENSOR_EMG)
+  K_THREAD_DEFINE(emg_thread_id, EMG_THREAD_STACK_SIZE, emg_streaming_thread, NULL, NULL, NULL, EMG_THREAD_PRIORITY, 0, 0);
+#endif
 /*==============================================================================
  * Public Function Implementations
  *============================================================================*/

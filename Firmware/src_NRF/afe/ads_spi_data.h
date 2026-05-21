@@ -85,7 +85,7 @@ extern volatile bool spi_xfer_done;
  * @brief Data ready interrupt flag
  *
  * Set by DRDY GPIO interrupt when new ADC data is available. Cleared
- * by process_ads_data() after reading.
+ * by () after reading.
  */
 extern volatile bool ads_data_ready;
 

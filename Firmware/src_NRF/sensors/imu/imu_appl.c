@@ -249,8 +249,10 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
 }
 
 /* Define the IMU thread */
-K_THREAD_DEFINE(imu_thread_id, IMU_THREAD_STACK_SIZE, imu_streaming_thread, 
-                NULL, NULL, NULL, IMU_THREAD_PRIORITY, 0, 0);
+#if defined(CONFIG_SENSOR_IMU)
+  K_THREAD_DEFINE(imu_thread_id, IMU_THREAD_STACK_SIZE, imu_streaming_thread, 
+                  NULL, NULL, NULL, IMU_THREAD_PRIORITY, 0, 0);
+#endif
 
 /*==============================================================================
  * Public Functions

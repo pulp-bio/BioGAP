@@ -219,3 +219,23 @@ CONFIG_SENSOR_EEG --> if the mainboard is connected to the EEG shield
 CONFIG_SD_WIFI_SHIELD --> if the mainboard is connected to the SD Card / Wi-Fi shield.
 
 Note: the use of WiFi or BLE can be tuned at run-time without changing the settings.
+
+## Add your own shield 
+If you want to add your own shield:
+
+a) Add your config and overlay files inside the [custom_shields](firmware/custom_shields) folder and copy them to the Sensei SDK
+b) Add your dts (if needed) inside the [custom_shields](firmware/custom_dts) folder and copy them to the Sensei SDK
+c) Add your source code under the [sensors][]
+d) Modify the [CMakeLists.txt](../CMakeLists.txt) to enable the shield and the target source. Specifically:
+
+
+```bash
+set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield SENSEI_YourShield")
+```
+```bash
+target_sources(app PRIVATE
+
+# Your C Files
+
+)
+```

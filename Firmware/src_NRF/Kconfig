@@ -60,6 +60,21 @@ config SENSOR_EEG
 	  Enable support for EEG sensor. This will include the necessary drivers,
 	  state machine states, and data processing for EEG data acquisition.
 
+
+config ONBOARD_IMU
+	bool "ONBOARD_IMU sensor"
+	default n
+	help
+	  Enable support for ONBOARD_IMU sensor. This will include the necessary drivers,
+	  state machine states, and data processing for ONBOARD_IMU data acquisition.
+
+config ONBOARD_MIC
+	bool "ONBOARD_MIC sensor"
+	default n
+	help
+	  Enable support for ONBOARD_MIC sensor. This will include the necessary drivers,
+	  state machine states, and data processing for ONBOARD_MIC data acquisition.
+
 config WI_FI
 	bool "WiFi data transmission"
 	default n
@@ -72,6 +87,8 @@ config SD_CARD
 	default n
 	help
 	  Enable support for SD card data storage. SD CARD/Wi-Fi shield must be connected to the mainboard. 
+
+
 
 menu "State Machine Configuration"
 

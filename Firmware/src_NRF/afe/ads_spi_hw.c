@@ -176,7 +176,7 @@ static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint
  * @note This function must be called before any other ADS functions.
  *       Errors are logged but not returned to allow graceful degradation.
  */
-void init_spi() {
+void init_ads_spi() {
   nrfx_err_t status;
   (void)status;
 

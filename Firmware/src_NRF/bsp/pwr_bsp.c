@@ -152,14 +152,16 @@ int pwr_bsp_start() {
   max77654_config(&pmic_h);
 
   // Power up GAP9 and connect to I2C bus
-  gap9_pwr(true);
-  LOG_INF("GAP9 powered up");
 
-  if (gpio_pin_set_dt(&gpio_p0_6_gap9_i2c_ctrl, 1) < 0) {
-    LOG_ERR("GAP9 I2C GPIO configuration error");
-    return -1;
-  }
-  LOG_INF("GAP9 connected to I2C bus");
+  // To-Do, this need to become a variable controlled by Kconfig, for now we can just power off GAP9 at startup.
+  // gap9_pwr(true);
+  // LOG_INF("GAP9 powered up");
+
+  // if (gpio_pin_set_dt(&gpio_p0_6_gap9_i2c_ctrl, 1) < 0) {
+  //   LOG_ERR("GAP9 I2C GPIO configuration error");
+  //   return -1;
+  // }
+  // LOG_INF("GAP9 connected to I2C bus");
 
   return 0;
 }

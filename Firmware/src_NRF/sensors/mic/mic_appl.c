@@ -241,8 +241,10 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
 }
 
 /* Define the microphone thread */
-K_THREAD_DEFINE(mic_thread_id, MIC_THREAD_STACK_SIZE, mic_streaming_thread, NULL, NULL, NULL, MIC_THREAD_PRIORITY, 0,
-                0);
+#if defined (CONFIG_SENSOR_MIC)
+  K_THREAD_DEFINE(mic_thread_id, MIC_THREAD_STACK_SIZE, mic_streaming_thread, NULL, NULL, NULL, MIC_THREAD_PRIORITY, 0,
+                  0);
+#endif
 
 /*==============================================================================
  * Public Functions

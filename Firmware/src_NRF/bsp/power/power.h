@@ -23,6 +23,17 @@
  */
 int power_init(void);
 
+
+/**
+ * @brief Turn on WiFi (V0) power.
+ * 
+ * Configures the PMIC for WiFi power supply.
+ * 
+ * @return 0 on success, negative on error.
+ */
+int power_wifi_on(void);
+
+
 /**
  * @brief Turn on ADS1298 power in unipolar configuration.
  * 

@@ -46,11 +46,13 @@ LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
  */
 void handle_connectivity_command(uint8_t cmd) {
   switch (cmd) {
+
   case REQUEST_BATTERY_STATE:
     LOG_DBG("Ping REQUEST_BATTERY_STATE");
     size_t out_len = 0;
     uint8_t bat_data[7];
     if (system_status_build_packet(bat_data, sizeof(bat_data), &out_len) == 0) {
+  
   #ifndef CONFIG_WI_FI
       send_data_ble(bat_data, (uint16_t)out_len);
   #else
@@ -94,7 +96,8 @@ void handle_connectivity_command(uint8_t cmd) {
     LOG_DBG("Ping GET_BOARD_STATE");
     int8_t current_state = system_status_get_board_state();
     LOG_DBG("Sending current state: %d", current_state);
-  #ifndef CONFIG_WI_FI
+  
+    #ifndef CONFIG_WI_FI
     send_data_ble(&current_state, 1);
   #else
     /* TODO: send via WiFi transport */
@@ -146,6 +149,7 @@ void handle_connectivity_command(uint8_t cmd) {
 
   case START_EEG_STREAMING:
     LOG_INF("Ping START_EEG_STREAMING");
+    
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset BLE packet counters for new session */
   #else
@@ -184,6 +188,7 @@ void handle_connectivity_command(uint8_t cmd) {
     /* TODO: print WiFi transport stats */
   #endif
     break;
+  
   case START_MIC_STREAMING:
     LOG_INF("Ping START_MIC_STREAMING");
     mic_start_streaming();
@@ -196,19 +201,21 @@ void handle_connectivity_command(uint8_t cmd) {
 
   case START_EEG_MIC_STREAMING:
     LOG_DBG("Ping START_EEG_MIC_STREAMING");
-  #ifndef CONFIG_WI_FI
-    ble_reset_packet_counters(); /* Reset packet counters for new session */
-  #else
+    #ifndef CONFIG_WI_FI
+      ble_reset_packet_counters(); /* Reset packet counters for new session */
+    #else
     /* TODO: reset WiFi transport packet counters */
-  #endif
+    #endif
     sync_begin(2);               /* Setup sync barrier for 2 subsystems (EEG + MIC) */
     mic_start_streaming();
     eeg_start_streaming();
     break;
+  
   case STOP_EEG_MIC_STREAMING:
     LOG_DBG("Ping STOP_EEG_MIC_STREAMING");
     mic_stop_streaming();
     eeg_stop_streaming();
+  
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
@@ -216,6 +223,8 @@ void handle_connectivity_command(uint8_t cmd) {
   #endif
     sync_reset();             /* Clean up sync state */
     break;
+
+  
   case START_STREAMING_ALL:
     LOG_DBG("Ping START_STREAMING_ALL");
   #ifndef CONFIG_WI_FI
@@ -228,6 +237,7 @@ void handle_connectivity_command(uint8_t cmd) {
     eeg_start_streaming();
     imu_start_streaming();
     break;
+
   case STOP_STREAMING_ALL:
     LOG_DBG("Ping STOP_STREAMING_ALL");
     mic_stop_streaming();
@@ -241,6 +251,8 @@ void handle_connectivity_command(uint8_t cmd) {
   #endif
     sync_reset();             /* Clean up sync state */
     break;
+
+    
   case START_IMU_STREAMING:
     LOG_DBG("Ping START_IMU_STREAMING");
     imu_start_streaming();
