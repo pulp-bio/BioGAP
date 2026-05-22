@@ -47,9 +47,10 @@ LOG_MODULE_REGISTER(wifi_sd_shield, LOG_LEVEL_INF);
 #define SPI_NRF_ESP_SENDER_PRIORITY 5           // Same priority as BLE send thread
 #define SPI_NRF_ESP_RECEIVER_PRIORITY 5           // Same priority as BLE receive thread
 
+K_MSGQ_DEFINE(esp_send_msgq, sizeof(esp_packet_t), ESP_SEND_QUEUE_SIZE, 4);
 bool handshake_done = false;
-/* Semaphore to synchronize NRF-ESP communication: producer waits for handshake to complete */
-K_SEM_DEFINE(handshake_complete_sem, 0, 1);
+/* Semaphore to synchronize NRF-ESP communication: both sender and receiver wait for handshake to complete */
+K_SEM_DEFINE(handshake_complete_sem, 0, 2);
 
 /**
  * @brief Process ESP data when DRDY interrupt occurs 
@@ -105,6 +106,39 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3)
     }
 }
 
+/**
+ * @brief Add Data to Send Buffer
+ *
+ * Enqueues data into the send message queue for transmission to ESP32. 
+ * Supports variable packet sizes.
+ * This function is the counter part of add_data_to_ble_send_buffer() used for BLE transmission. 
+ *
+ * @param data The pointer to the byte array to be sent over BLE.
+ * @param size The size of the data to send in bytes.
+ */
+void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
+
+    int ret;
+    esp_packet_t packet;
+
+    // Validate size
+    if (size > ESP_PCKT_MAX_SIZE) {
+        LOG_ERR("Packet size %d exceeds max %d", size, ESP_PCKT_MAX_SIZE);
+        return;
+    }
+
+    packet.size = size;
+    memcpy(packet.data, data, size);
+    LOG_INF("Enqueuing packet for ESP sending, size: %d", size);    
+    ret = k_msgq_put(&esp_send_msgq, &packet, K_FOREVER); // K_NO_WAIT failed
+    if (ret != 0) {
+        LOG_ERR("Failed to enqueue data for ESP sending (err %d)", ret);
+    } else {
+        LOG_DBG("Data enqueued for ESP sending: %d", size);
+    }
+}
+
+
 /** @brief SPI sender thread for NRF and ESP communication*/
 void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
 {
@@ -116,30 +150,24 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
 
     k_sem_take(&handshake_complete_sem, K_FOREVER);
     LOG_INF("SPI NRF-ESP sender took semaphore, starting sender thread");
+    esp_packet_t packet;
     while(1){
-            // Important. we need to check that the data-ready flag is not set
-
-            // To be Updated
-            // // wait notification from producer that data are available in the queue
-            // exg_packet_t packet;
-            // int ret = k_msgq_get(&send_msgq, &packet, K_FOREVER);
-            // LOG_INF("Recieved new packet with header 0x%02X, counter %d, tailer 0x%02X from producer thread",
-            //         packet.data[0], (packet.data[1] | packet.data[2] <<8), packet.data[EXG_PCK_LNGTH-1]);
-            // if (ret != 0) {
-            //         LOG_ERR("k_msgq_get failed (%d)! System halted.", ret);
-            //         LOG_ERR("=== QUEUE FAILURE - NRF53 HALTED ===");
-            //         while (1) {k_sleep(K_FOREVER);}
-            // }
-            // biogap_to_esp_transaction(&packet, &time_last_log, &time_curr_log);
-
-                /* Placeholder thread: avoid tight spinning until queue-based sender is enabled. */
-                k_msleep(10);
-
+            int ret = k_msgq_get(&esp_send_msgq, &packet, K_FOREVER);
+            if (ret == 0) {
+                // Process packet for transmission to ESP32
+                ret = biogap_to_esp_transaction(&packet);
+                if (ret != 0) {
+                    LOG_ERR("Failed to send packet to ESP32 (err %d)", ret);
+                    // halt 
+                    LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
+                    while (1) {k_sleep(K_FOREVER);}
+                }
+            } else {
+                LOG_ERR("Failed to get packet from esp_send_msgq (err %d)", ret);
+            }
     }
 
 }
-
-
 
 /** @brief Perform initial handshake with ESP32 to verify that the connection is established */
 int initial_handshake_nrf_esp() {
@@ -174,7 +202,8 @@ int initial_handshake_nrf_esp() {
 
                 //k_sleep(K_MSEC(2000));
                 handshake_done = true;
-                k_sem_give(&handshake_complete_sem);    // Signal sender and receiver threads to start
+                k_sem_give(&handshake_complete_sem);    // Signal sender thread to start
+                k_sem_give(&handshake_complete_sem);    // Signal receiver thread to start
                 LOG_INF("Initial handshake with ESP32 successful, semaphore given ");
                 return 0; 
             }

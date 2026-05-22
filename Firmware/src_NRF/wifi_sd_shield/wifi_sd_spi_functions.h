@@ -44,4 +44,7 @@
 /**  @brief SPI master transmit/receive transaction */
 int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len);
 
+/**  @brief BIOGAP to ESP transaction */
+int biogap_to_esp_transaction(esp_packet_t *packet);
+
 #endif /* WIFI_SD_SHIELD_SPI_FUNCTIONS_H */

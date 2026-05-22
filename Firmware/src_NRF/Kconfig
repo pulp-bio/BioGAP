@@ -88,6 +88,13 @@ config SD_CARD
 	help
 	  Enable support for SD card data storage. SD CARD/Wi-Fi shield must be connected to the mainboard. 
 
+config DUMMY_SENSOR
+	bool "Dummy sensor support"
+	default n
+	help
+	  Enable support for dummy sensor.
+	  Used to emulate the behavior of real sensors and test the data acquisition, synchronization, and transmission pipeline without needing actual hardware sensors connected.
+
 
 
 menu "State Machine Configuration"

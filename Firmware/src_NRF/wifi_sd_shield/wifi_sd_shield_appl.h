@@ -37,7 +37,8 @@
 #ifndef WIFI_SD_SHIELD_APPL_H
 #define WIFI_SD_SHIELD_APPL_H
 
-
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 
 /** @brief Perform initial handshake with ESP32 to verify that the connection is established */
 int initial_handshake_nrf_esp();
@@ -53,5 +54,7 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3);
 /** @brief SPI sender thread for NRF and ESP communication*/
 void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3);
 
+/** @brief Add data to ESP send buffer */
+void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size);
 
 #endif /* WIFI_SD_SHIELD_APPL_H */

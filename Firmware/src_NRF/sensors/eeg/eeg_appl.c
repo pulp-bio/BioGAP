@@ -102,7 +102,6 @@ static void eeg_streaming_thread(void *arg1, void *arg2, void *arg3);
  * Thread Definition
  *============================================================================*/
 #if defined(CONFIG_SENSOR_EEG)
-
   K_THREAD_DEFINE(eeg_thread_id, EEG_THREAD_STACK_SIZE, eeg_streaming_thread, NULL, NULL, NULL, EEG_THREAD_PRIORITY, 0, 0);
 #endif
 

@@ -152,6 +152,14 @@ int main(void) {
     start_bluetooth_adverts();
   #endif
 
+#if defined(DUMMY_SENSOR)
+  LOG_INF("Initializing Dummy Sensor...");
+  if (dummy_sensor_init() != 0) {
+    LOG_ERR("Dummy sensor initialization failed");
+  } else {
+    LOG_INF("Dummy sensor initialized");
+  }
+#endif 
 //   #if defined(CONFIG_ONBOARD_MIC)
 //     // Initialize microphone
 //     LOG_INF("Initializing microphone...");

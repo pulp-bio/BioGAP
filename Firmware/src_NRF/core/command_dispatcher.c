@@ -146,6 +146,31 @@ void handle_connectivity_command(uint8_t cmd) {
   case GO_TO_SLEEP:
     LOG_DBG("Ping GO_TO_SLEEP");
     break;
+  
+
+  case START_DUMMY_STREAMING:
+    LOG_INF("Ping START_DUMMY_STREAMING");
+  #if defined CONFIG_WI_FI
+    /* TODO: reset WiFi transport packet counters */
+  #else
+    /* Reset packet counters for new session */
+    ble_reset_packet_counters();
+  #endif
+    LOG_INF("Starting DUMMY streaming");
+    dummy_sensor_start_streaming();
+    break;
+
+
+  case STOP_DUMMY_STREAMING:
+    LOG_INF("Ping STOP_DUMMY_STREAMING");
+    dummy_sensor_stop_streaming();
+  #if defined CONFIG_WI_FI
+    /* TODO: print WiFi transport stats */
+  #else
+    /* TODO: print WiFi transport stats */
+    ble_print_packet_stats(); /* Print BLE packet stats */
+  #endif
+    break;
 
   case START_EEG_STREAMING:
     LOG_INF("Ping START_EEG_STREAMING");

@@ -109,3 +109,51 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     return 0;
 }
 
+
+int biogap_to_esp_transaction(esp_packet_t *packet){
+
+    /* NRF53 as SPI master sends packet to ESP32 slave */
+    LOG_INF("Starting SPI transaction..."); 
+    
+    if (packet->size == 0) {
+        LOG_WRN("Empty packet, nothing to send");
+        return -EINVAL;
+    }
+
+    /* Determine actual send length: if producer left size as max, try to find tailer marker to avoid sending garbage */
+    size_t send_len = packet->size;
+    // for (size_t i = 0; i < packet->size; i++) {
+    //     if (packet->data[i] == ESP_SPI_TAILER) {
+    //         send_len = i + 1;
+    //         break;
+    //     }
+    // }
+
+    uint8_t spi_rx_buf[send_len];
+    memset(spi_rx_buf, 0, send_len);
+
+    LOG_INF("Sending packet with header 0x%02X, tailer (at) %zu, counter %d, send_len=%zu",
+            packet->data[0], send_len - 1, (packet->data[1] | packet->data[2] << 8), send_len);
+
+    int ret = spi_master_transceive(packet->data, spi_rx_buf, send_len);
+    //drdy_pin_set(1);
+
+    if(ret != 0){
+            LOG_ERR("SPI transaction failed (ret=%d)", ret);
+            LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
+            while (1) {k_sleep(K_FOREVER);}
+            return ret;
+    }
+
+    // check if expected received header and tailer are correct
+        if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
+            LOG_ERR("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
+                spi_rx_buf[0], ESP_SPI_HEADER, spi_rx_buf[send_len - 1], ESP_SPI_TAILER);
+            LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
+            while (1) {k_sleep(K_FOREVER);}
+            return -EIO;
+    }
+    return 0;
+}
+
+

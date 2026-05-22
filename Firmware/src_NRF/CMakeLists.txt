@@ -65,6 +65,9 @@ target_sources(app PRIVATE
     # Sensors - EMG
     sensors/emg/emg_appl.c
 
+    # Sensors - Dummy sensor (for testing without real hardware)
+    sensors/dummy_sensor/dummy_sensor_appl.c
+
     # BLE
     ble/ble_appl.c
     ble/bluetooth.c

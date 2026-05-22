@@ -209,11 +209,11 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
           
           ble_packet[MIC_PCKT_SIZE - 1] = MIC_DATA_TRAILER;
 
-          /* Send via BLE queue */
-          #ifndef CONFIG_WI_FI
-            add_data_to_ble_send_buffer(ble_packet, MIC_PCKT_SIZE);
+          
+          #if defined(CONFIG_WI_FI)
           #else
-            // todo: send via Wi-Fi transport
+          /* Send via BLE queue */
+            add_data_to_ble_send_buffer(ble_packet, MIC_PCKT_SIZE);
           #endif
           
 

@@ -84,10 +84,22 @@ extern nrfx_spim_t spim_b_wifi_sd_shield_inst;
 #define ESP_SPI_HEADER 0x66             // Header byte for every ESP <--> NRF transaction, to verify correct data parsing
 #define ESP_SPI_TAILER 0xBB             // Tailer byte for every ESP <--> NRF transaction, to verify correct data parsing
 
-
+#define ESP_PCKT_MAX_SIZE 820           // Set for now equal to the max size of WULPUS packets    
+#define ESP_SEND_QUEUE_SIZE 4           // Max number of packets that can be queued for sending to ESP. 
+                                        // Adjust as needed based on expected traffic and memory constraints.     
 /** @brief Boolean to verify successful connection between NRF and ESP */
 extern bool handshake_done;
 
+
+/**
+ * @brief ESP packet structure for variable-size packet support
+ * 
+ * Allows sending packets of different sizes through the same queue.
+ */
+typedef struct {
+  uint16_t size;                              // Actual size of data in this packet
+  uint8_t data[ESP_PCKT_MAX_SIZE];              // Packet data buffer
+} esp_packet_t;
 
 
 #endif // WIFI_SD_SHIELD_DEFS_H
