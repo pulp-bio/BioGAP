@@ -112,8 +112,8 @@ extern EventGroupHandle_t g_evt;
 // -------------------- Constants for NRF-ESP SPI transfer and packet building --------------------
 #define SPI_FROM_BIOGAP_MAX_SIZE    1000   // max number of bytes in a single SPI transaction from BIOGAP (e.g. 410 if streaming from WULPUS)
 
-#define EMULATE_EXG_DATA 0
-#define EMULATE_US_DATA 1
+#define EMULATE_EXG_DATA 1
+#define EMULATE_US_DATA 0
 #if (EMULATE_EXG_DATA == 1)
     #define NRF_EXG_PACKET_SIZE       211
     #define NRF_EXG_HEADER            0x55

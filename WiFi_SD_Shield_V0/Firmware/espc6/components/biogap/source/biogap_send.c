@@ -24,7 +24,7 @@ static void drdy_pulse_timer_callback(void *arg)
 
 esp_err_t propagate_start_command_to_biogap_master(){
     tx_to_biogap_buf[0] = ESP_SPI_HEADER;
-    tx_to_biogap_buf[1] = 37;                       // will be replaced by what is received from BIOGUI 
+    tx_to_biogap_buf[1] = 249;                       // will be replaced by what is received from BIOGUI 
     tx_to_biogap_buf[2] = 0x00;                     // nothing
     tx_to_biogap_buf[3] = ESP_SPI_TAILER;
     rx_from_biogap_buf[0] = 0x00;
@@ -94,6 +94,8 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
             ret = propagate_start_command_to_biogap_master();
             if (ret == ESP_OK) {
                 send_start_command_to_biogap_master = true;
+                ESP_LOGI(BIOGAP_SEND_TAG, "Start command sent; send task exiting so read task can continue streaming");
+                break;
             }
             else{
                 ESP_LOGE(BIOGAP_SEND_TAG, "Failed to propagate start command to BIOGAP master, will retry: %s", esp_err_to_name(ret));

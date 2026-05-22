@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "sdcard",
-    "project_version":    "ee82459-dirty",
+    "project_version":    "20b2223-dirty",
     "project_path":       "C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6",
     "idf_path":           "C:/Users/giusy/esp/v5.3.1/esp-idf",
     "build_dir":          "C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build",
