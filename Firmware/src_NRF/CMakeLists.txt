@@ -11,14 +11,20 @@ set(OVERLAY_CONFIG "child_image/hci_ipc.conf")
 
 
 # Setup SENSEI SDK
-set(SENSEI_SDK_ROOT $ENV{SENSEI_SDK_ROOT})
+set(SENSEI_SDK_ROOT "$ENV{SENSEI_SDK_ROOT}")
+message(STATUS "SENSEI_SDK_ROOT env: '$ENV{SENSEI_SDK_ROOT}'")
+message(STATUS "SENSEI_SDK_ROOT resolved: '${SENSEI_SDK_ROOT}'")
 if(NOT SENSEI_SDK_ROOT)
     message(FATAL_ERROR "SENSEI_SDK_ROOT is not defined")
 endif()
 
-list(APPEND EXTRA_ZEPHYR_MODULES
-    ${SENSEI_SDK_ROOT}/NRF
-)
+set(ZEPHYR_EXTRA_MODULES "${SENSEI_SDK_ROOT}/NRF")
+set(ZEPHYR_EXTRA_MODULES "${ZEPHYR_EXTRA_MODULES}" CACHE STRING "Zephyr extra modules" FORCE)
+message(STATUS "ZEPHYR_EXTRA_MODULES: '${ZEPHYR_EXTRA_MODULES}'")
+
+if(NOT EXISTS "${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml")
+    message(FATAL_ERROR "Expected Zephyr module metadata at '${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml'")
+endif()
 
 # Configure the project
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})

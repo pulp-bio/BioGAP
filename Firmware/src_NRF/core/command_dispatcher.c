@@ -157,12 +157,18 @@ void handle_connectivity_command(uint8_t cmd) {
     ble_reset_packet_counters();
   #endif
     LOG_INF("Starting DUMMY streaming");
+    // check the status of Wi-Fi state machine
+    if(nrf_esp_comm_state != NRF_ESP_IDLE){
+        LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+    }
+    nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
     dummy_sensor_start_streaming();
     break;
 
 
   case STOP_DUMMY_STREAMING:
     LOG_INF("Ping STOP_DUMMY_STREAMING");
+    nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
     dummy_sensor_stop_streaming();
   #if defined CONFIG_WI_FI
     /* TODO: print WiFi transport stats */

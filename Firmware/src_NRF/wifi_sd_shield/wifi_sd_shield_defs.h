@@ -101,5 +101,10 @@ typedef struct {
   uint8_t data[ESP_PCKT_MAX_SIZE];              // Packet data buffer
 } esp_packet_t;
 
-
+typedef enum {
+  NRF_ESP_IDLE,
+  SEND_TO_ESP,
+} nrf_to_esp_comm_state_t; 
+extern nrf_to_esp_comm_state_t nrf_esp_comm_state;
+extern bool serve_esp_requests; // Flag to control whether to process incoming ESP data,to avoid SPI bus contention during critical operations
 #endif // WIFI_SD_SHIELD_DEFS_H

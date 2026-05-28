@@ -35,6 +35,7 @@
 #include "afe/ads_appl.h"
 #include "bsp/system_status/system_status.h"
 #include "core/sync_streaming.h"
+#include "wifi_sd_shield/wifi_sd_shield_defs.h"
 #include <stdbool.h>
 #include <stdint.h>
 

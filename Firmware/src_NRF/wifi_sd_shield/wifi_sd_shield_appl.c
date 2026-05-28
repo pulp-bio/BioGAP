@@ -62,18 +62,25 @@ void process_esp_data(void) {
     // LOG_INF("ESP DATA READY interrupt received");
     // Clear flag first to avoid missing next interrupt
     esp_data_ready = false;
-    
     // Allocate buffer for incoming data. Need to allocate 4 Bytes for ESP DMA transaction
     uint8_t spi_tx_buf[4] = {0x00, 0x00, 0x00, 0x00}; 
     uint8_t spi_rx_buf[4] = {0x00, 0x00, 0x00, 0x00};
     (void)spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
     LOG_INF("SPI transaction with ESP completed, received: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
+    // reset the flag
+    serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding
     // Check if expected bytes match
     if (spi_rx_buf[0] == ESP_SPI_HEADER && spi_rx_buf[3] == ESP_SPI_TAILER) {
         LOG_INF("Received valid data from ESP: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
         uint8_t cmd = spi_rx_buf[1]; 
         handle_connectivity_command(cmd);
         }
+    else{
+        LOG_WRN("Received invalid data from ESP, ignoring: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
+        // halt the system
+        LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
+        while (1) {k_sleep(K_FOREVER);}
+    }
     }
 
   k_sleep(K_USEC(1));
@@ -98,7 +105,8 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3)
         if(esp_data_ready){
             LOG_INF("ESP data ready flag set, processing incoming data...");
             process_esp_data();
-        } else {
+        } 
+        else {
             /* Yield CPU when no DRDY event is pending. */
             k_msleep(1);
         }
@@ -129,7 +137,7 @@ void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
 
     packet.size = size;
     memcpy(packet.data, data, size);
-    LOG_INF("Enqueuing packet for ESP sending, size: %d", size);    
+    //LOG_INF("Enqueuing packet for ESP sending, size: %d", size);    
     ret = k_msgq_put(&esp_send_msgq, &packet, K_FOREVER); // K_NO_WAIT failed
     if (ret != 0) {
         LOG_ERR("Failed to enqueue data for ESP sending (err %d)", ret);
@@ -155,12 +163,31 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
             int ret = k_msgq_get(&esp_send_msgq, &packet, K_FOREVER);
             if (ret == 0) {
                 // Process packet for transmission to ESP32
+
+                // make sure that the read-transaction from the ESP has the priority to avoid SPI bus contention. 
+                if (serve_esp_requests) {
+                    LOG_INF("ESP requests pending, prioritizing incoming data processing over sending");
+                    // Yield to allow processing of incoming ESP data
+                    k_msleep(1);
+                    continue; // Skip this send iteration to prioritize incoming data
+                }
+
+                // check we are in the correct state to send data to ESP
+                if (nrf_esp_comm_state != SEND_TO_ESP) {
+                    //LOG_WRN("Not in correct state to send data to ESP, current state: %d. Packet sending deferred.", nrf_esp_comm_state);
+                    // Yield and retry later
+                    k_msleep(1);
+                    continue;
+                }
                 ret = biogap_to_esp_transaction(&packet);
                 if (ret != 0) {
                     LOG_ERR("Failed to send packet to ESP32 (err %d)", ret);
                     // halt 
-                    LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
-                    while (1) {k_sleep(K_FOREVER);}
+                    LOG_ERR("=== SPI FAILURE in spi_nrf_esp_sender_thread - NRF53 HALTED ===");
+                    while (1) 
+                    {
+                        k_sleep(K_FOREVER);
+                    }
                 }
             } else {
                 LOG_ERR("Failed to get packet from esp_send_msgq (err %d)", ret);

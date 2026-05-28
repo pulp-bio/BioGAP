@@ -45,6 +45,7 @@
 #include "zephyr/irq.h"
 #include "wifi_sd_shield_defs.h"
 #include <nrfx_spim.h>
+#include "core/command_dispatcher.h"
 
 extern struct k_sem spi_nrf_esp_transfer_done;
 /**

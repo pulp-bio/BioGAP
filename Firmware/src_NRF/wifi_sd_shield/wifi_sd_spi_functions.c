@@ -113,7 +113,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
 int biogap_to_esp_transaction(esp_packet_t *packet){
 
     /* NRF53 as SPI master sends packet to ESP32 slave */
-    LOG_INF("Starting SPI transaction..."); 
+    //LOG_INF("Starting SPI transaction..."); 
     
     if (packet->size == 0) {
         LOG_WRN("Empty packet, nothing to send");
@@ -132,8 +132,8 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
     uint8_t spi_rx_buf[send_len];
     memset(spi_rx_buf, 0, send_len);
 
-    LOG_INF("Sending packet with header 0x%02X, tailer (at) %zu, counter %d, send_len=%zu",
-            packet->data[0], send_len - 1, (packet->data[1] | packet->data[2] << 8), send_len);
+    //LOG_INF("Sending packet with header 0x%02X, tailer (at) %zu, counter %d, send_len=%zu",
+    //        packet->data[0], send_len - 1, (packet->data[1] | packet->data[2] << 8), send_len);
 
     int ret = spi_master_transceive(packet->data, spi_rx_buf, send_len);
     //drdy_pin_set(1);
@@ -145,14 +145,25 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
             return ret;
     }
 
-    // check if expected received header and tailer are correct
-        if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
+        // check if expected received header and tailer are correct
+    if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
             LOG_ERR("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
                 spi_rx_buf[0], ESP_SPI_HEADER, spi_rx_buf[send_len - 1], ESP_SPI_TAILER);
             LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
             while (1) {k_sleep(K_FOREVER);}
-            return -EIO;
+            return -EIO;   
     }
+
+    //check if the received data contain an implicit stop command from ESP
+    if(spi_rx_buf[2] == ESP_STOP_COMMAND){
+        LOG_INF("Received ESP STOP command, resetting NRF-ESP communication state and waiting for stop sensor command");
+        // reset state to idle to block sending data to ESP
+        nrf_esp_comm_state = NRF_ESP_IDLE; 
+        // stop command is enqueued in the 3rd byte
+        handle_connectivity_command(spi_rx_buf[3]);
+    }
+
+
     return 0;
 }
 

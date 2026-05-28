@@ -38,6 +38,8 @@
 LOG_MODULE_REGISTER(wifi_sd_shield_inits, LOG_LEVEL_INF);
 
 bool esp_data_ready = false;
+bool serve_esp_requests = false; // Flag to control whether to process incoming ESP data, to avoid SPI bus contention during critical operations
+nrf_to_esp_comm_state_t nrf_esp_comm_state = NRF_ESP_IDLE; // State variable to manage NRF-ESP communication flow
 nrfx_spim_t spim_b_wifi_sd_shield_inst = NRFX_SPIM_INSTANCE(SPIM_WIFI_SD_SHIELD_INST_IDX);
 
 
@@ -58,7 +60,9 @@ static struct gpio_callback esp_drdy_cb_data;
 static void cb_esp_drdy(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
   /* Signal that ESP has new data to send */
   esp_data_ready = true;
-  LOG_DBG("ESP DRDY interrupt: new data ready from ESP");
+  // Signal also that ESP must be served 
+  serve_esp_requests = true;
+  //LOG_INF("ESP DRDY interrupt: new data ready from ESP");
 }
 
 
@@ -70,7 +74,7 @@ void spim_biogap_wifi_shield_handler(nrfx_spim_evt_t const *p_event, void *p_con
     (void)p_event;
     (void)p_context;
     /* Handle SPI transfer completion if needed */
-    LOG_DBG("SPI transfer complete");
+    //LOG_INF("SPI transfer complete");
     k_sem_give(&spi_nrf_esp_transfer_done);
 }
 
