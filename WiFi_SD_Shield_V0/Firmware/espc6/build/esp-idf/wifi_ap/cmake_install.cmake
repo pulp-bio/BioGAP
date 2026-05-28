@@ -1,8 +1,8 @@
-# Install script for directory: C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/components/biogap_read
+# Install script for directory: C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/components/wifi_ap
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "C:/Program Files (x86)/sdcard")
+  set(CMAKE_INSTALL_PREFIX "C:/Program Files (x86)/wifi_sd_shield_v0_ap")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 

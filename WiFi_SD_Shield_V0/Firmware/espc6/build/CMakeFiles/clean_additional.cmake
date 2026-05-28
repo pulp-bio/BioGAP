@@ -17,8 +17,8 @@ if("${CONFIG}" STREQUAL "" OR "${CONFIG}" STREQUAL "")
   "ldgen_libraries"
   "ldgen_libraries.in"
   "project_elf_src_esp32c6.c"
-  "sdcard.bin"
-  "sdcard.map"
+  "wifi_sd_shield_v0_ap.bin"
+  "wifi_sd_shield_v0_ap.map"
   "x509_crt_bundle.S"
   )
 endif()

@@ -55,6 +55,10 @@ static esp_err_t init_nrf_spi_master_esp_slave_bus(void)
     return ESP_OK;
 }
 
+/** @brief Initialize the pin multiplexer. Used for Wi-Fi Shield Hardware version V0.
+ * This configures the MUX_SEL pin as input+output with pull-up, and sets it HIGH by default to select the SD card SPI path. 
+ * The pin can be toggled LOW to switch to the NRF SPI path when needed.
+*/
 void pin_mux_init(){
     // Configure as input+output so readback reflects the pad while we drive it.
     // Keep internal pull-up enabled so default idle state is HIGH.
@@ -233,7 +237,6 @@ esp_err_t switch_to_nrf_master_spi_mode(void)
     if (read_from_biogap_task_nrf_master_pq_esp_slave_handle != NULL) {
         ulTaskNotifyTake(pdFALSE, 0);  // Non-blocking drain
     }
-
 
 #if ENABLE_SPI_PROFILE_LOGS
     int64_t timer_stop = esp_timer_get_time();

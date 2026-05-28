@@ -17,18 +17,48 @@
 #include "driver/spi_slave.h"
 
 
-// ---------------------- Node definitons ---------------------
-#define NODE_ID 3             // Unique node identifier. Must be changed manually for each node
-static const uint8_t node_id = NODE_ID;
+// ---------------------- AP State Machine ---------------------
+#define IS_WBAN  0
+// ---------------------- AP State Machine ----------------------------
+
+typedef enum {
+    STATE_DISCONNECTED,  // Initial State, waiting to verify TCP connection and BIOGAP communication
+    STATE_IDLE  ,        // TCP and BIOGAP comms verified, waiting to start streaming
+    STATE_STREAMING,     // Streaming active/expected
+} node_state_t;
+
+extern volatile node_state_t node_state;
+extern int64_t start_time;
+
+// -------------------- Event bits --------------------
+extern EventGroupHandle_t g_evt;
+
+// These are for Wi-Fi Streaming
+#define B_BIOGAP_CONECTED           (1U << 0)  // Connection with BIOGAP master verified by successful SPI transaction
+#define B_WIFI_CONNECTED            (1U << 1)  // TCP connected (socket usable)
+#define B_GUI_SOCKET_BIND           (1U << 2)  // GUI socket successfully bound and accepted (gui_sock valid)
+#define B_START_CMD_RCV             (1U << 3)  // Start command received from GUI (via TCP)
+#define B_START_CMD_FWD_TO_BIOGAP   (1U << 4)  // Start command forwarded to BIOGAP master successfully
+#define B_STOP_CMD_RCV_GUI              (1U << 5)  // Stop command received from GUI (via TCP)
+#define B_STOP_CMD_FWD_TO_BIOGAP    (1U << 6)  // Stop command forwarded to BIOGAP master successfully
+#define B_WRITING_TO_SD             (1U << 7)  // SD task currently owns SPI MUX path
+#define B_RINGBUFFER_FULL           (1U << 8)  // Ringbuffer is full, cannot add more data until some is consumed
+#define B_STOP_STREAM               (1U << 9)  // Stop streaming requested by GUI or system policy
+#define B_END_ACQUISITION          (1U << 10)  // SD task signaled acquisition end
+// SPI quiesce handshake: reader sets this when outstanding pre-queued descriptors
+// have been drained and the SPI bus is safe for a STOP-frame transmit by sender.
+#define B_SPI_QUIESCED             (1U << 11)
+#define B_STOP_CMD_RCV_FORCED              (1U << 12)  // Stop command received from GUI (via TCP)
+#define B_STOP_CMD_RPT_PENDING      (1U << 13)  // GUI task should report the simulated STOP event
+
+
 
 /* Handshake ping-pong markers to validate NRF-ESP communication */
 #define HANDSHAKE_MARKER 0x5A
 #define HANDSHAKE_RESPONSE_MARKER 0xA5
 
-
 // -------------------- Task stack sizes --------------------
 #define READ_FROM_BIOGAP_STACK_SIZE  4096
-
 
 
 // -------------------- Packet format --------------------
@@ -47,12 +77,11 @@ static const uint8_t node_id = NODE_ID;
 // NOTE: this is currently enforced by prepare_buffer(). Keep consistent with builder math.
 #define EXPECTED_DATA_LEN            1436
 
-
 // -------------------- Streaming / timing --------------------
 #define NODE_FRAME_TAG               0x0A    // high nibble for node frame
 
 // -------------------- Ringbuffer --------------------
-#define RINGBUFF_SIZE                200000  // bytes
+#define RINGBUFF_SIZE                300000  // bytes
 extern RingbufHandle_t ringbuff;
 
 // -------------------- SD_CARD --------------------
@@ -65,18 +94,6 @@ extern uint8_t sd_writecounter;
 void pin_mux_init();
 
 
-// -------------------- Event bits --------------------
-extern EventGroupHandle_t g_evt;
-
-// These are for Wi-Fi Streaming
-#define B_EXPECTED_STREAMING   (1U << 0)  // producer IRQ->task notifications enabled
-#define B_CONNECTED            (1U << 1)  // TCP connected (socket usable)
-#define B_CLEAN_PREV_TICKS     (1U << 2)  // one-shot: clear accumulated ticks/counters on start
-#define B_STOP_CMD             (1U << 3)  // stop acquisition but keep connection
-#define B_END_ACQUISITION      (1U << 4)  // shutdown
-#define B_NETWORK_CONGESTED    (1U << 5)  // TX detected stall/backpressure
-#define B_WRITING_TO_SD        (1U << 6)  // SD task currently owns SPI MUX path
-
 #define MAX_RECONNECTION_ATTEMPTS  10
 
 // -------------------- Integration mode flags --------------------
@@ -88,7 +105,6 @@ extern EventGroupHandle_t g_evt;
 #ifndef ESP_DRDY_TOGGLE_TEST_ONLY
 #define ESP_DRDY_TOGGLE_TEST_ONLY 1
 #endif
-
 
 
 // -------------------- NRF <-> ESP SPI pins --------------------
@@ -154,22 +170,16 @@ esp_err_t config_spi_nrf_master_esp_slave_drdy_pin(void);
 
 extern bool handshake_pq_done;
 extern bool send_start_command_to_biogap_master;
+
+
 //---------------------- Logging tags ------------------------
 // Set to 1 only when actively profiling SPI mode-switch overhead.
 #ifndef ENABLE_SPI_PROFILE_LOGS
 #define ENABLE_SPI_PROFILE_LOGS 0
 #endif
 
-#ifndef NOTIFY_USER_FOR_DRDY
-#define NOTIFY_USER_FOR_DRDY 0
-#endif
-
 // 0: suppress INFO logs (default, faster runtime)
 // 1: enable INFO logs for debugging/profiling
 #ifndef ESP_ENABLE_INFO_LOGS
 #define ESP_ENABLE_INFO_LOGS 1
-#endif
-
-#ifndef ENABLE_LED_STRIP
-#define ENABLE_LED_STRIP 0
 #endif

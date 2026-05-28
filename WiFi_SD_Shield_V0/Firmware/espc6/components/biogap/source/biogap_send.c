@@ -3,6 +3,8 @@
 #include "common.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "driver/spi_slave.h"
+
 
 bool send_start_command_to_biogap_master = false;
 #define BIOGAP_SEND_TAG "biogap_send"
@@ -22,9 +24,63 @@ static void drdy_pulse_timer_callback(void *arg)
     }
 }
 
-esp_err_t propagate_start_command_to_biogap_master(){
+static esp_err_t data_ready_pulse(void)
+{
+    esp_err_t ret;
+
+    gpio_set_level(NRF_DATA_READY_GPIO, 1);
+    ret = esp_timer_start_once(drdy_pulse_timer_handle, NRF_DRDY_PULSE_US);
+    if (ret != ESP_OK) {
+        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to start DRDY pulse timer: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    return ESP_OK;
+}
+
+
+static esp_err_t send_stop_command_to_biogap_master(uint8_t command)
+{
+
+    /* Overwrite the shared streaming TX buffer so any pre-queued
+     * descriptor that is still in flight does not keep returning the
+     * previous packet data while we transition to STOP.
+     */
+    if (sendbuf_persistent) {
+        memset(sendbuf_persistent, 0, NRF_EXG_PACKET_SIZE);
+        sendbuf_persistent[0] = ESP_EXG_HEADER; 
+        sendbuf_persistent[1] = command;               // to signal the command to the master
+        sendbuf_persistent[2] = 0x00;                     // nothing
+        sendbuf_persistent[3] = ESP_EXG_TAILER;
+    }
+
+    // drain now any in-flight transactions that were received after STOP was requested but before we entered quiesce state
+    spi_slave_transaction_t *ret_trans;
+    esp_err_t ret;
+
+    // basically sending stop using SPI
+    ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+    if (ret != ESP_OK) {
+        ESP_LOGI(BIOGAP_SEND_TAG, "Failed to drain in-flight transaction during STOP quiesce");
+         /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
+        return ret; 
+    }
+    uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
+
+    /* Validate packet markers (header + tailer) */
+
+    ESP_LOGI(BIOGAP_SEND_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
+             tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
+    return ESP_OK;
+
+}
+static esp_err_t send_command_to_biogap_master(uint8_t command)
+{
+    esp_err_t ret;
+
     tx_to_biogap_buf[0] = ESP_SPI_HEADER;
-    tx_to_biogap_buf[1] = 249;                       // will be replaced by what is received from BIOGUI 
+    tx_to_biogap_buf[1] = command;                   // will be replaced by what is received from BIOGUI 
     tx_to_biogap_buf[2] = 0x00;                     // nothing
     tx_to_biogap_buf[3] = ESP_SPI_TAILER;
     rx_from_biogap_buf[0] = 0x00;
@@ -34,18 +90,46 @@ esp_err_t propagate_start_command_to_biogap_master(){
 
 
     spi_slave_transaction_t t = {0};
-    t.length = 32;  /* 4 bytes = 32 bits */
+    t.length = sizeof(tx_to_biogap_buf) * 8;  /* exactly 4 bytes = 32 bits */
     t.tx_buffer = tx_to_biogap_buf;
     t.rx_buffer = rx_from_biogap_buf;
 
-    esp_err_t ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
-    if(ret !=ESP_OK){
-        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to send start command to BIOGAP master: %s", esp_err_to_name(ret));
-        return ESP_FAIL;
+
+    ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
+    if (ret != ESP_OK) {
+        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to transmit command to BIOGAP master: %s", esp_err_to_name(ret));
+        return ret;
     }
+
+    ESP_LOGI(BIOGAP_SEND_TAG, "Transmitted 4-byte control frame: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X",
+             tx_to_biogap_buf[0], tx_to_biogap_buf[1], tx_to_biogap_buf[2], tx_to_biogap_buf[3]);
+    //ESP_LOGI(BIOGAP_SEND_TAG, "Received byte: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X", rx_from_biogap_buf[0], rx_from_biogap_buf[1], rx_from_biogap_buf[2], rx_from_biogap_buf[3]);
 
     return ESP_OK;
 }
+
+esp_err_t propagate_command_to_biogap_master(uint8_t command)
+{
+    esp_err_t ret = data_ready_pulse();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    // add a small debouncing delay
+    //vTaskDelay(pdMS_TO_TICKS(1));
+    return send_command_to_biogap_master(command);
+}
+
+esp_err_t propagate_stop_command_to_biogap_master(uint8_t command)
+{
+    esp_err_t ret = data_ready_pulse();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    // add a small debouncing delay
+    vTaskDelay(pdMS_TO_TICKS(1));
+    return send_stop_command_to_biogap_master(command);
+}
+
 
 void send_to_biogap_task_nrf_master_esp_slave(void *pv){
 
@@ -70,37 +154,78 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
         }
     }
 
+    /* Wait once for the NRF link to come up. After that, block on command events. */
+    xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
+
     while(1){
+        /* Sleep until a command or backpressure event arrives. */
+        /* Wake on START, RINGBUFFER backpressure, or GUI STOP so this
+         * task can process STOP handoff when GUI issues it. Use
+         * pdFALSE (do not clear) so handlers can explicitly clear bits
+         * after processing.
+         */
+        EventBits_t bits = xEventGroupWaitBits(g_evt,
+                               B_START_CMD_RCV | B_RINGBUFFER_FULL | B_SPI_QUIESCED,
+                               pdTRUE,
+                               pdFALSE,
+                               portMAX_DELAY);
 
-        if (!handshake_pq_done){
-            // Wait for handshake to complete 
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-
-        if(handshake_pq_done && !send_start_command_to_biogap_master){
-            // send start command to NRF master to enable the data transfer
-            // first, set DRDY pin HIGH to signal NRF master that ESP is ready to receive data. 
-            // Give a Pulse on DRDY to signal NRF master that ESP is ready to receive data. This will trigger the NRF master to start clocking data over SPI.
-
-            gpio_set_level(NRF_DATA_READY_GPIO, 1);
-            ret = esp_timer_start_once(drdy_pulse_timer_handle, NRF_DRDY_PULSE_US);
-            if (ret != ESP_OK) {
-                ESP_LOGE(BIOGAP_SEND_TAG, "Failed to start DRDY pulse timer: %s", esp_err_to_name(ret));
-                break;
-            }
-
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-            ret = propagate_start_command_to_biogap_master();
+        if ((bits & B_START_CMD_RCV) && !(xEventGroupGetBits(g_evt) & B_START_CMD_FWD_TO_BIOGAP)) {
+            uint8_t start_command = rx_data_from_gui[0];
+            ret = propagate_command_to_biogap_master(start_command);
             if (ret == ESP_OK) {
                 send_start_command_to_biogap_master = true;
-                ESP_LOGI(BIOGAP_SEND_TAG, "Start command sent; send task exiting so read task can continue streaming");
-                break;
-            }
-            else{
+                xEventGroupSetBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
+                xEventGroupClearBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
+                xEventGroupClearBits(g_evt, B_START_CMD_RCV);
+                node_state = STATE_STREAMING;
+                ESP_LOGI(BIOGAP_SEND_TAG, "Start command propagated to BIOGAP master successfully");
+            } else {
                 ESP_LOGE(BIOGAP_SEND_TAG, "Failed to propagate start command to BIOGAP master, will retry: %s", esp_err_to_name(ret));
-                break;
+                vTaskDelay(pdMS_TO_TICKS(10));
+                xEventGroupSetBits(g_evt, B_START_CMD_RCV);
             }
+        }
+
+        if ((bits & B_SPI_QUIESCED) && !(xEventGroupGetBits(g_evt) & B_STOP_CMD_FWD_TO_BIOGAP)) {
+            ESP_LOGI(BIOGAP_SEND_TAG, "Received stop command from GUI, forwarding STOP command to BIOGAP master");
+            node_state = STATE_IDLE;
+            /* Wait for the reader to acknowledge quiesce before completing
+             * STOP handoff. In pre-queue mode the reader owns the SPI slave
+             * queue, so the STOP command is queued as a persistent control
+             * transaction instead of using the blocking slave transmit API.
+             */
+            //EventBits_t qbits = xEventGroupWaitBits(g_evt, B_SPI_QUIESCED, pdFALSE, pdFALSE, portMAX_DELAY);
+            // if (!(qbits & B_SPI_QUIESCED)) {
+            //     ESP_LOGW(BIOGAP_SEND_TAG, "Timeout waiting for reader quiesce before STOP");
+            //     continue;
+            // }
+            
+            // check if we ar ehere because the ringbuffer is full and we have already sent a STOP command. If so, we don't need to send another STOP to BIOGAP master, just wait for the next START command
+            // if((xEventGroupGetBits(g_evt) & B_RINGBUFFER_FULL)){
+            //     ret = propagate_stop_command_to_biogap_master(STOP_DUMMY_STREAMING);
+            // }
+            // else{
+            //     ret = propagate_stop_command_to_biogap_master(rx_data_from_gui[0]);
+            // }
+            // if (ret != ESP_OK) {
+            //     ESP_LOGE(BIOGAP_SEND_TAG, "Failed to propagate stop command to BIOGAP master, will retry: %s", esp_err_to_name(ret));
+            //     continue;
+            // }
+            //small delay before let it possible to do it again
+            //vTaskDelay(pdMS_TO_TICKS(500));
+            xEventGroupSetBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
+            // clear also B_START_CMD_FWD_TO_BIOGAP to allow future start commands to be forwarded again
+            //xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
+            xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI);
+            /* Clear SPI quiesced bit after STOP handoff to allow reader to re-arm on next start */
+            xEventGroupClearBits(g_evt, B_SPI_QUIESCED);
+           
+            ESP_LOGI(BIOGAP_SEND_TAG, "Stop command propagated to BIOGAP master successfully");
+        }
+
+        if (bits & B_RINGBUFFER_FULL) {
+            ESP_LOGW(BIOGAP_SEND_TAG, "Ringbuffer backpressure signaled");
         }
     }
     vTaskDelete(NULL);

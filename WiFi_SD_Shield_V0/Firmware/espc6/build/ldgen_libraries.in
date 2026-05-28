@@ -81,6 +81,7 @@ $<TARGET_FILE:__idf_nvs_sec_provider>
 $<TARGET_FILE:__idf_spiffs>
 $<TARGET_FILE:__idf_wifi_provisioning>
 $<TARGET_FILE:__idf_led_strip>
+$<TARGET_FILE:__idf_wifi_ap>
 $<TARGET_FILE:__idf_biogap>
 $<TARGET_FILE:__idf_common>
 $<TARGET_FILE:__idf_sdcard_spi>

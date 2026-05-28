@@ -2,7 +2,7 @@
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "C:/Program Files (x86)/sdcard")
+  set(CMAKE_INSTALL_PREFIX "C:/Program Files (x86)/wifi_sd_shield_v0_ap")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 
@@ -535,6 +535,11 @@ endif()
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
   include("C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/led_strip/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)

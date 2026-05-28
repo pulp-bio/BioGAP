@@ -12,7 +12,7 @@ C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/m
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/flash.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/encrypted-flash.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/_project_elf_src.dir
-C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/sdcard.elf.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/wifi_sd_shield_v0_ap.elf.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/size.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/size-files.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/CMakeFiles/size-components.dir
@@ -812,6 +812,13 @@ C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/led_
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/led_strip/CMakeFiles/install.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/led_strip/CMakeFiles/install/local.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/led_strip/CMakeFiles/install/strip.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/__idf_wifi_ap.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/edit_cache.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/rebuild_cache.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/list_install_components.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/install.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/install/local.dir
+C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/wifi_ap/CMakeFiles/install/strip.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/biogap/CMakeFiles/__idf_biogap.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/biogap/CMakeFiles/edit_cache.dir
 C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V0/Firmware/espc6/build/esp-idf/biogap/CMakeFiles/rebuild_cache.dir

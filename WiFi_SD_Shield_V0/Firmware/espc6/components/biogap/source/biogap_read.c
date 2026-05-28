@@ -49,6 +49,7 @@
 #include "driver/spi_common.h"
 #include "esp_heap_caps.h"
 #include "esp_intr_alloc.h"
+#include "gui_task.h"
 
 #define BIOGAP_READ_TAG "biogap_read_hs"
 
@@ -58,8 +59,7 @@
 #define HANDSHAKE_RETRY_DELAY_MS 20
 #define HANDSHAKE_MAX_RETRIES 50
 
-/* Pre-queue configuration: keep this many transactions armed at all times */
-#define QUEUE_COUNT 4
+
 #define PACKET_SZ NRF_EXG_PACKET_SIZE
 
 /* Ensure per-transaction packet size never exceeds configured SPI bus transfer cap */
@@ -73,82 +73,14 @@ _Static_assert(PACKET_SZ <= SPI_FROM_BIOGAP_MAX_SIZE,
 /* Persistent DMA buffers and descriptors (pre-allocated once at task start) */
 static uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
 static spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
-static uint8_t *sendbuf_persistent = NULL;               /* Single TX buffer for all desciptors */
+uint8_t *sendbuf_persistent = NULL;               /* Single TX buffer for all desciptors */
+static bool prequeued = false;
 
 bool handshake_pq_done = false;
 
-/* DMA-capable handshake buffers */
-static uint8_t handshake_pq_tx_buffer[4] __attribute__((aligned(4)));
-static uint8_t handshake_pq_rx_buffer[4] __attribute__((aligned(4)));
-static uint8_t expected_pq_handshake_buffer[4] __attribute__((aligned(4)));
 
-// // =============================================================================
-// // ISR: NRF data ready interrupt handler
-// // =============================================================================
-// void IRAM_ATTR nrf_data_ready_isr(void *arg)
-// {
-//     BaseType_t hp_woken = pdFALSE;
 
-//     if (read_from_biogap_task_nrf_master_pq_esp_slave_handle != NULL) {
-//         vTaskNotifyGiveFromISR(read_from_biogap_task_nrf_master_pq_esp_slave_handle, &hp_woken);
-//     }
 
-//     if (hp_woken == pdTRUE) {
-//         portYIELD_FROM_ISR();
-//     }
-// }
-
-// =============================================================================
-// HELPER: Initial handshake
-// =============================================================================
-
-void initial_handshake_nrf_master_esp_slave_pq(void)
-{
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> HANDSHAKE: Waiting for NRF master to pull CS and clock 4 bytes (marker=0x%02X)", HANDSHAKE_MARKER);
-    
-    handshake_pq_tx_buffer[0] = HANDSHAKE_MARKER;
-    handshake_pq_tx_buffer[1] = HANDSHAKE_MARKER;
-    handshake_pq_tx_buffer[2] = HANDSHAKE_MARKER;
-    handshake_pq_tx_buffer[3] = HANDSHAKE_MARKER;
-    handshake_pq_rx_buffer[0] = 0x00;
-    handshake_pq_rx_buffer[1] = 0x00;
-    handshake_pq_rx_buffer[2] = 0x00;
-    handshake_pq_rx_buffer[3] = 0x00;
-    expected_pq_handshake_buffer[0] = HANDSHAKE_RESPONSE_MARKER;
-    expected_pq_handshake_buffer[1] = HANDSHAKE_RESPONSE_MARKER;
-    expected_pq_handshake_buffer[2] = HANDSHAKE_RESPONSE_MARKER;
-    expected_pq_handshake_buffer[3] = HANDSHAKE_RESPONSE_MARKER;
-
-    spi_slave_transaction_t t = {0};
-    t.length = 32;  /* 4 bytes = 32 bits */
-    t.tx_buffer = handshake_pq_tx_buffer;
-    t.rx_buffer = handshake_pq_rx_buffer;
-
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> TX buffer addr=%p, contents=[0x%02X 0x%02X 0x%02X 0x%02X]", 
-            handshake_pq_tx_buffer, handshake_pq_tx_buffer[0], handshake_pq_tx_buffer[1], 
-            handshake_pq_tx_buffer[2], handshake_pq_tx_buffer[3]);
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> RX buffer addr=%p", handshake_pq_rx_buffer);
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> Calling spi_slave_transmit() - will block until CS pulled low");
-    
-    esp_err_t ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> HANDSHAKE: spi_slave_transmit returned: %s", esp_err_to_name(ret));
-    
-    if (ret == ESP_OK) {
-        ESP_LOGI(BIOGAP_READ_TAG, "SPI xact OK: sent [0x%02X 0x%02X 0x%02X 0x%02X], received [0x%02X 0x%02X 0x%02X 0x%02X]", 
-                handshake_pq_tx_buffer[0], handshake_pq_tx_buffer[1], handshake_pq_tx_buffer[2], handshake_pq_tx_buffer[3],
-                handshake_pq_rx_buffer[0], handshake_pq_rx_buffer[1], handshake_pq_rx_buffer[2], handshake_pq_rx_buffer[3]);
-    } else {
-        ESP_LOGE(BIOGAP_READ_TAG, "SPI xact failed: %s", esp_err_to_name(ret));
-    }
-    
-    /* Validate handshake response */
-    if (memcmp(handshake_pq_rx_buffer, expected_pq_handshake_buffer, 4) == 0) {
-        ESP_LOGI(BIOGAP_READ_TAG, "Handshake successful: received expected response");
-        handshake_pq_done = true;
-    } else {
-        ESP_LOGW(BIOGAP_READ_TAG, "Handshake warning: received response does not match expected marker");
-    }
-}
 
 // =============================================================================
 // HELPER: Pre-queue all RX transactions
@@ -186,12 +118,12 @@ static esp_err_t prequeue_transactions(void)
 esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
 {
     void *rb_ptr = NULL;
-    if (xRingbufferSendAcquire(ringbuff, &rb_ptr, len, 0) != pdTRUE || rb_ptr == NULL) {
+    if (xRingbufferSendAcquire(biogap_ringbuf, &rb_ptr, len, 0) != pdTRUE || rb_ptr == NULL) {
         ESP_LOGE(BIOGAP_READ_TAG, "Failed to acquire ringbuffer space");
         return ESP_FAIL;
     }
     memcpy(rb_ptr, data, len);
-    xRingbufferSendComplete(ringbuff, rb_ptr);
+    xRingbufferSendComplete(biogap_ringbuf, rb_ptr);
     return ESP_OK;
 }
 
@@ -202,6 +134,93 @@ static inline bool is_valid_packet(const uint8_t *data)
 {
     return (data[0] == NRF_EXG_HEADER && data[PACKET_SZ - 1] == NRF_EXG_TAILER);
 }
+
+static void enter_stop_quiesce_state(void)
+{
+    ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
+    node_state = STATE_IDLE;
+
+    /* Overwrite the shared streaming TX buffer so any pre-queued
+     * descriptor that is still in flight does not keep returning the
+     * previous packet data while we transition to STOP.
+     */
+    if (sendbuf_persistent) {
+        memset(sendbuf_persistent, 0, PACKET_SZ);
+        sendbuf_persistent[0] = ESP_EXG_HEADER; 
+        sendbuf_persistent[3] = ESP_STOP_COMMAND;               // to signal the STOP command to the master
+        sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
+    }
+
+    // drain now any in-flight transactions that were received after STOP was requested but before we entered quiesce state
+    spi_slave_transaction_t *ret_trans;
+    esp_err_t ret;
+    uint8_t drained=0; 
+
+    // basically sending stop using SPI
+    for(uint8_t i=0; i<QUEUE_COUNT; i++){
+        ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+        if (ret != ESP_OK) {
+            ESP_LOGI(BIOGAP_READ_TAG, "Failed to drain in-flight transaction during STOP quiesce");
+            /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
+        }
+        else{
+            uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
+            ESP_LOGI(BIOGAP_READ_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
+                    tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
+            drained++;
+        }
+    }
+
+    ESP_LOGI(BIOGAP_READ_TAG, "Drained %d in-flight transactions during STOP quiesce", drained);
+
+    xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
+    // clean also the START_CMD_BIT
+    //xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
+
+    /* Prevent re-prequeuing descriptors while stopped. */
+    prequeued = false;
+}
+
+static void transacte_stop_command(uint8_t command)
+{
+    ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
+    
+
+    /* Overwrite the shared streaming TX buffer so any pre-queued
+     * descriptor that is still in flight does not keep returning the
+     * previous packet data while we transition to STOP.
+     */
+    if (sendbuf_persistent) {
+        memset(sendbuf_persistent, 0, PACKET_SZ);
+        sendbuf_persistent[0] = ESP_EXG_HEADER; 
+        sendbuf_persistent[2] = ESP_STOP_COMMAND;               // to signal the STOP command to the master
+        sendbuf_persistent[3] = command;               // to signal the STOP command to the master
+        sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
+    }
+
+    // drain now any in-flight transactions that were received after STOP was requested but before we entered quiesce state
+    spi_slave_transaction_t *ret_trans;
+    esp_err_t ret;
+
+    ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+    if (ret != ESP_OK) {
+        ESP_LOGI(BIOGAP_READ_TAG, "Failed to drain in-flight transaction during STOP quiesce");
+        /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
+    }
+    else{
+        uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
+        ESP_LOGI(BIOGAP_READ_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
+                tx_data[0], tx_data[1], tx_data[2], tx_data[3]); 
+    }
+    xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
+    // clean also the START_CMD_BIT
+    //xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
+
+    /* Prevent re-prequeuing descriptors while stopped. */
+    node_state = STATE_IDLE;
+    prequeued = false;
+}
+
 
 // =============================================================================
 // MAIN TASK: High-speed SPI slave with pre-queue pattern
@@ -224,14 +243,14 @@ static inline bool is_valid_packet(const uint8_t *data)
  */
 void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 {
-    ESP_LOGI(BIOGAP_READ_TAG, "Starting HIGH-SPEED SPI slave task (pre-queue pattern)");
-    vTaskDelay(pdMS_TO_TICKS(500));
-    ESP_LOGW(BIOGAP_READ_TAG, ">>> Startup delay complete, ready for master");
-    
+    // ESP_LOGI(BIOGAP_READ_TAG, "Starting HIGH-SPEED SPI slave task (pre-queue pattern)");
+    // vTaskDelay(pdMS_TO_TICKS(500));
+    // ESP_LOGW(BIOGAP_READ_TAG, ">>> Startup delay complete, ready for master");
+
     uint64_t packet_count = 0;
     uint16_t tx_counter = 0;  /* Transmit counter sent to master */
     int64_t last_log_us = 0;
-
+    
     /* Allocate persistent TX buffer (same for all transactions) */
     sendbuf_persistent = heap_caps_malloc(PACKET_SZ, MALLOC_CAP_DMA);
     if (!sendbuf_persistent) {
@@ -264,12 +283,6 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
     /* === MAIN LOOP === */
     while (1) {
-        /* Check for stop signal */
-        if (xEventGroupGetBits(g_evt) & B_END_ACQUISITION) {
-            ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, exiting");
-            break;
-        }
-
         /* Wait for SD card writes to complete */
         if ((xEventGroupGetBits(g_evt) & B_WRITING_TO_SD) != 0) {
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -277,20 +290,14 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
         }
 
         /* === HANDSHAKE PHASE === */
-        if (!handshake_pq_done) {
-            initial_handshake_nrf_master_esp_slave_pq();
-            continue;
-        }
-
-        if(!send_start_command_to_biogap_master){
-            // Wait to send start command to NRF master to set-up the device 
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
+        /* Handshake is executed at startup in main; block here until the connected bit is set */
+        xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
+        /* Wait until a start command has been forwarded to BIOGAP (sleep until bit set) */
+        xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
 
         /* === PRE-QUEUE PHASE (run once after handshake) === */
-        static bool prequeued = false;
         if (!prequeued) {
+            //ESP_LOGI(BIOGAP_READ_TAG, "Prequeing transactions to arm slave...");
             if (prequeue_transactions() != ESP_OK) {
                 ESP_LOGE(BIOGAP_READ_TAG, "Failed to pre-queue transactions, breaking");
                 break;
@@ -306,66 +313,92 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
             continue;
         }
 
-        /* Get result of current transaction (blocks until complete) */
-        spi_slave_transaction_t *ret_trans = NULL;
-        esp_err_t ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, portMAX_DELAY);
-        if (ret != ESP_OK) {
-            ESP_LOGE(BIOGAP_READ_TAG, "Failed to get SPI result: %s", esp_err_to_name(ret));
-            break;
+
+
+
+        /* First, check if STOP command has arrived from either the GUI or the overflow/backpressure path. */
+        if (xEventGroupGetBits(g_evt) & (B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED)) {
+            ESP_LOGI(BIOGAP_READ_TAG, "STOP command received, entering quiesce state before processing more transactions");
+            if(node_state != STATE_IDLE){
+                //enter_stop_quiesce_state();
+                transacte_stop_command(rx_data_from_gui[0]);
+                // break to give priority to the STOP command processing before we check for new transactions again
+                continue;
+            }
+            //enter_stop_quiesce_state();
+            /* Block here until a START has been forwarded to BIOGAP */
+            xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
+            ESP_LOGI(BIOGAP_READ_TAG, "START command forwarded to BIOGAP after quiesc, resuming streaming");
+            //xEventGroupClearBits(g_evt, B_SPI_QUIESCED);
+            continue; // jump to the top of the loop
         }
+        else{
 
-        size_t rx_bytes = (size_t)(ret_trans->trans_len / 8);
-        if (rx_bytes != PACKET_SZ) {
-            ESP_LOGW(BIOGAP_READ_TAG,
-                     "SPI length mismatch: expected=%uB got=%uB (master likely clocks different length)",
-                     (unsigned)PACKET_SZ,
-                     (unsigned)rx_bytes);
-        }
+            if (node_state == STATE_STREAMING){
+                spi_slave_transaction_t *ret_trans = NULL;
+                esp_err_t ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+                if (ret == ESP_ERR_TIMEOUT) {
+                    continue;
+                }
+                if (ret != ESP_OK) {
+                    ESP_LOGE(BIOGAP_READ_TAG, "Failed to get SPI result: %s", esp_err_to_name(ret));
+                    break;
+                }
 
-        uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
+                size_t rx_bytes = (size_t)(ret_trans->trans_len / 8);
+                if (rx_bytes != PACKET_SZ) {
+                    ESP_LOGW(BIOGAP_READ_TAG,
+                            "SPI length mismatch: expected=%uB got=%uB (master likely clocks different length)",
+                            (unsigned)PACKET_SZ,
+                            (unsigned)rx_bytes);
+                }
 
-        /* Validate packet markers (header + tailer) */
-        if (!is_valid_packet(rx_data)) {
-            ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
-                     rx_data[0], rx_data[PACKET_SZ - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
-            break;
-        }
+                uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
 
-        /* Extract counter (little-endian at bytes[1:2]) */
-        uint16_t counter = (rx_data[2] << 8) | rx_data[1];
-        packet_count++;
+                /* Validate packet markers (header + tailer) */
+                if (!is_valid_packet(rx_data)) {
+                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
+                            rx_data[0], rx_data[PACKET_SZ - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
+                    break;
+                }
 
-        /* Log periodically */
-        int64_t now_us = esp_timer_get_time();
-        if ((now_us - last_log_us) >= (DRDY_LOG_INTERVAL_MS * 1000LL)) {
-            // ESP_LOGI(BIOGAP_READ_TAG, "Packet #%" PRIu64 " OK: counter=%u, hdr=0x%02X, tail=0x%02X",
-            //          packet_count, counter, rx_data[0], rx_data[PACKET_SZ - 1]);
-            last_log_us = now_us;
-        }
+                /* Extract counter (little-endian at bytes[1:2]) */
+                uint16_t counter = (rx_data[2] << 8) | rx_data[1];
+                packet_count++;
 
-        /* Add packet to ringbuffer */
-        ret = add_to_ringbuffer(rx_data, PACKET_SZ);
-        if (ret != ESP_OK) {
-            ESP_LOGE(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
-            break;
-        }
+                /* Add packet to ringbuffer */
+                ret = add_to_ringbuffer(rx_data, PACKET_SZ);
+                if (ret != ESP_OK) {
+                    ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
+                    xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
+                    // check if thr stop command has not been set already to avoid setting it multiple times
+                    if(xEventGroupGetBits(g_evt) & B_STOP_CMD_RCV_GUI){
+                        ESP_LOGI(BIOGAP_READ_TAG, "STOP command already received, not forwarding another STOP to BIOGAP master");
+                    }
+                    else{
+                        ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg"); 
+                        xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
+                    }
+                    continue; // jump to next iteration so the STOP check can run immediately
+                }
+                /* Update TX buffer with new counter for next transaction */
+                tx_counter++;  /* Advance transmit counter */
+                sendbuf_persistent[0] = ESP_EXG_HEADER;
+                sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
+                sendbuf_persistent[1] = tx_counter & 0xFF;  /* LSB of counter */
+                sendbuf_persistent[2] = (tx_counter >> 8) & 0xFF;  /* MSB of counter */
 
-        /* Update TX buffer with new counter for next transaction */
-        tx_counter++;  /* Advance transmit counter */
-        sendbuf_persistent[0] = ESP_EXG_HEADER;
-        sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
-        sendbuf_persistent[1] = tx_counter & 0xFF;  /* LSB of counter */
-        sendbuf_persistent[2] = (tx_counter >> 8) & 0xFF;  /* MSB of counter */
-
-        /* === KEY PATTERN: RE-QUEUE IMMEDIATELY ===
-         * This is the core of the high-speed pattern:
-         * Return the descriptor to the queue IMMEDIATELY after processing.
-         * This keeps the slave armed continuously with no gaps.
-         */
-        ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
-        if (ret != ESP_OK) {
-            ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction: %s", esp_err_to_name(ret));
-            break;
+                /* === KEY PATTERN: RE-QUEUE IMMEDIATELY ===
+                * This is the core of the high-speed pattern:
+                * Return the descriptor to the queue IMMEDIATELY after processing.
+                * This keeps the slave armed continuously with no gaps.
+                */
+                ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction: %s", esp_err_to_name(ret));
+                    break;
+                }  
+            }  
         }
     }
 

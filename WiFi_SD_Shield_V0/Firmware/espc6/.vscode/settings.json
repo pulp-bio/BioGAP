@@ -23,5 +23,8 @@
     "freertos.h": "c",
     "station_init.h": "c"
   },
-  "idf.currentSetup": "C:\\Users\\giusy\\esp\\v5.3.1\\esp-idf"
+  "idf.currentSetup": "C:\\Users\\giusy\\esp\\v5.3.1\\esp-idf",
+  "idf.openOcdConfigs": [
+    "board/esp32c6-builtin.cfg"
+  ]
 }
