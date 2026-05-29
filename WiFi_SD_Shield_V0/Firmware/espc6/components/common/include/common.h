@@ -167,7 +167,7 @@ esp_err_t biogap_read_hw_init(void);
 esp_err_t switch_to_nrf_master_spi_mode(void);
 esp_err_t switch_to_sd_spi_mode(void);
 esp_err_t config_spi_nrf_master_esp_slave_drdy_pin(void);
-
+esp_err_t init_nrf_spi_master_esp_slave_bus(void); 
 extern bool handshake_pq_done;
 extern bool send_start_command_to_biogap_master;
 

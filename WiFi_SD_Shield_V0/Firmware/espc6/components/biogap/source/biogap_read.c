@@ -135,92 +135,98 @@ static inline bool is_valid_packet(const uint8_t *data)
     return (data[0] == NRF_EXG_HEADER && data[PACKET_SZ - 1] == NRF_EXG_TAILER);
 }
 
-static void enter_stop_quiesce_state(void)
+esp_err_t free_prequeue_resources(void)
 {
-    ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
-    node_state = STATE_IDLE;
-
-    /* Overwrite the shared streaming TX buffer so any pre-queued
-     * descriptor that is still in flight does not keep returning the
-     * previous packet data while we transition to STOP.
-     */
     if (sendbuf_persistent) {
-        memset(sendbuf_persistent, 0, PACKET_SZ);
-        sendbuf_persistent[0] = ESP_EXG_HEADER; 
-        sendbuf_persistent[3] = ESP_STOP_COMMAND;               // to signal the STOP command to the master
-        sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
+        free(sendbuf_persistent);
+        sendbuf_persistent = NULL;
+        ESP_LOGW(BIOGAP_READ_TAG, "Freed TX buffer");
     }
 
-    // drain now any in-flight transactions that were received after STOP was requested but before we entered quiesce state
-    spi_slave_transaction_t *ret_trans;
-    esp_err_t ret;
-    uint8_t drained=0; 
-
-    // basically sending stop using SPI
-    for(uint8_t i=0; i<QUEUE_COUNT; i++){
-        ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
-        if (ret != ESP_OK) {
-            ESP_LOGI(BIOGAP_READ_TAG, "Failed to drain in-flight transaction during STOP quiesce");
-            /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
-        }
-        else{
-            uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
-            ESP_LOGI(BIOGAP_READ_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
-                    tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
-            drained++;
+    for (int i = 0; i < QUEUE_COUNT; i++) {
+        if (rx_bufs[i]) {
+            free(rx_bufs[i]);
+            rx_bufs[i] = NULL;
         }
     }
-
-    ESP_LOGI(BIOGAP_READ_TAG, "Drained %d in-flight transactions during STOP quiesce", drained);
-
-    xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
-    // clean also the START_CMD_BIT
-    //xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
-
-    /* Prevent re-prequeuing descriptors while stopped. */
-    prequeued = false;
+    return ESP_OK;
 }
 
-static void transacte_stop_command(uint8_t command)
+esp_err_t allocate_prequeue_resources(void)
+{
+    if (sendbuf_persistent != NULL) {
+        ESP_LOGW(BIOGAP_READ_TAG, "TX buffer already allocated, reinitializing for fresh start");
+    }
+
+    if (sendbuf_persistent == NULL) {
+        sendbuf_persistent = heap_caps_malloc(PACKET_SZ, MALLOC_CAP_DMA);
+        if (!sendbuf_persistent) {
+            ESP_LOGE(BIOGAP_READ_TAG, "Failed to allocate sendbuf");
+            return ESP_FAIL;
+        }
+    }
+
+    memset(sendbuf_persistent, 0, PACKET_SZ);
+    sendbuf_persistent[0] = ESP_EXG_HEADER;
+    sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
+    sendbuf_persistent[1] = 0;
+    sendbuf_persistent[2] = 0;
+
+    for (int i = 0; i < QUEUE_COUNT; i++) {
+        if (rx_bufs[i] == NULL) {
+            rx_bufs[i] = heap_caps_malloc(PACKET_SZ, MALLOC_CAP_DMA);
+            if (!rx_bufs[i]) {
+                ESP_LOGE(BIOGAP_READ_TAG, "Failed to allocate RX buffer %d", i);
+                free_prequeue_resources();
+                return ESP_FAIL;
+            }
+        }
+        memset(rx_bufs[i], 0, PACKET_SZ);
+    }
+
+    ESP_LOGI(BIOGAP_READ_TAG, "Allocated TX buffer: %p", sendbuf_persistent);
+    ESP_LOGI(BIOGAP_READ_TAG, "Allocated %d RX buffers (DMA-capable, total %.1f KB)",
+             QUEUE_COUNT, (float)(QUEUE_COUNT * PACKET_SZ) / 1024.0);
+    return ESP_OK;
+}
+
+static esp_err_t enter_stop_quiesce_state(void)
 {
     ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
-    
 
-    /* Overwrite the shared streaming TX buffer so any pre-queued
-     * descriptor that is still in flight does not keep returning the
-     * previous packet data while we transition to STOP.
+    /* Overwrite the shared streaming TX buffer so the active pre-queued
+     * descriptor returns the STOP command frame during quiesce.
      */
     if (sendbuf_persistent) {
         memset(sendbuf_persistent, 0, PACKET_SZ);
-        sendbuf_persistent[0] = ESP_EXG_HEADER; 
-        sendbuf_persistent[2] = ESP_STOP_COMMAND;               // to signal the STOP command to the master
-        sendbuf_persistent[3] = command;               // to signal the STOP command to the master
+        sendbuf_persistent[0] = ESP_EXG_HEADER;
+        sendbuf_persistent[2] = ESP_STOP_COMMAND;
+        sendbuf_persistent[3] = rx_data_from_gui[0];
         sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
     }
 
-    // drain now any in-flight transactions that were received after STOP was requested but before we entered quiesce state
     spi_slave_transaction_t *ret_trans;
     esp_err_t ret;
+    uint8_t drained = 0;
 
     ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
     if (ret != ESP_OK) {
         ESP_LOGI(BIOGAP_READ_TAG, "Failed to drain in-flight transaction during STOP quiesce");
-        /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
-    }
-    else{
+    } else {
         uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
         ESP_LOGI(BIOGAP_READ_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
-                tx_data[0], tx_data[1], tx_data[2], tx_data[3]); 
+                 tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
     }
-    xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
-    // clean also the START_CMD_BIT
-    //xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
 
-    /* Prevent re-prequeuing descriptors while stopped. */
+    // ret = free_prequeue_resources();
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(BIOGAP_READ_TAG, "Failed to free pre-queue resources");
+    // }
+    xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
     node_state = STATE_IDLE;
     prequeued = false;
+    return ESP_OK;
 }
-
 
 // =============================================================================
 // MAIN TASK: High-speed SPI slave with pre-queue pattern
@@ -243,44 +249,14 @@ static void transacte_stop_command(uint8_t command)
  */
 void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 {
-    // ESP_LOGI(BIOGAP_READ_TAG, "Starting HIGH-SPEED SPI slave task (pre-queue pattern)");
-    // vTaskDelay(pdMS_TO_TICKS(500));
-    // ESP_LOGW(BIOGAP_READ_TAG, ">>> Startup delay complete, ready for master");
 
     uint64_t packet_count = 0;
     uint16_t tx_counter = 0;  /* Transmit counter sent to master */
     int64_t last_log_us = 0;
-    
-    /* Allocate persistent TX buffer (same for all transactions) */
-    sendbuf_persistent = heap_caps_malloc(PACKET_SZ, MALLOC_CAP_DMA);
-    if (!sendbuf_persistent) {
-        ESP_LOGE(BIOGAP_READ_TAG, "Failed to allocate sendbuf");
-        vTaskDelete(NULL);
-        return;
-    }
-    memset(sendbuf_persistent, 0, PACKET_SZ);
-    /* Initialize TX buffer with header/tailer and initial counter */
-    sendbuf_persistent[0] = ESP_EXG_HEADER;
-    sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
-    sendbuf_persistent[1] = 0;  /* Initial counter LSB */
-    sendbuf_persistent[2] = 0;  /* Initial counter MSB */
-    ESP_LOGI(BIOGAP_READ_TAG, "Allocated TX buffer: %p", sendbuf_persistent);
-
-    /* Allocate QUEUE_COUNT RX buffers for pre-queuing pattern */
-    for (int i = 0; i < QUEUE_COUNT; i++) {
-        rx_bufs[i] = heap_caps_malloc(PACKET_SZ, MALLOC_CAP_DMA);
-        if (!rx_bufs[i]) {
-            ESP_LOGE(BIOGAP_READ_TAG, "Failed to allocate RX buffer %d", i);
-            vTaskDelete(NULL);
-            return;
-        }
-        memset(rx_bufs[i], 0, PACKET_SZ);
-    }
-    ESP_LOGI(BIOGAP_READ_TAG, "Allocated %d RX buffers (DMA-capable, total %.1f KB)", 
-             QUEUE_COUNT, (float)(QUEUE_COUNT * PACKET_SZ) / 1024.0);
-
+    esp_err_t ret;
+    ret = allocate_prequeue_resources();
     read_from_biogap_task_nrf_master_pq_esp_slave_handle = xTaskGetCurrentTaskHandle();
-
+    bool first_read = true;
     /* === MAIN LOOP === */
     while (1) {
         /* Wait for SD card writes to complete */
@@ -288,22 +264,20 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
-
         /* === HANDSHAKE PHASE === */
         /* Handshake is executed at startup in main; block here until the connected bit is set */
         xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
         /* Wait until a start command has been forwarded to BIOGAP (sleep until bit set) */
         xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
 
-        /* === PRE-QUEUE PHASE (run once after handshake) === */
-        if (!prequeued) {
-            //ESP_LOGI(BIOGAP_READ_TAG, "Prequeing transactions to arm slave...");
-            if (prequeue_transactions() != ESP_OK) {
-                ESP_LOGE(BIOGAP_READ_TAG, "Failed to pre-queue transactions, breaking");
-                break;
+        if(!prequeued){
+            ret = prequeue_transactions();
+            if (ret != ESP_OK) {
+                ESP_LOGE(BIOGAP_READ_TAG, "Failed to pre-queue transactions, cannot start streaming");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
             }
             prequeued = true;
-            continue;  /* Wait for first transaction to complete */
         }
 
         /* === STREAMING PHASE (main high-speed loop) === */
@@ -313,22 +287,21 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
             continue;
         }
 
-
-
-
         /* First, check if STOP command has arrived from either the GUI or the overflow/backpressure path. */
         if (xEventGroupGetBits(g_evt) & (B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED)) {
-            ESP_LOGI(BIOGAP_READ_TAG, "STOP command received, entering quiesce state before processing more transactions");
+            //ESP_LOGI(BIOGAP_READ_TAG, "STOP command received, entering quiesce state before processing more transactions");
             if(node_state != STATE_IDLE){
-                //enter_stop_quiesce_state();
-                transacte_stop_command(rx_data_from_gui[0]);
+                ret = enter_stop_quiesce_state();
                 // break to give priority to the STOP command processing before we check for new transactions again
+                xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP); 
+                first_read = true;   
                 continue;
+                  
             }
             //enter_stop_quiesce_state();
             /* Block here until a START has been forwarded to BIOGAP */
-            xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
-            ESP_LOGI(BIOGAP_READ_TAG, "START command forwarded to BIOGAP after quiesc, resuming streaming");
+            //xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
+            //ESP_LOGI(BIOGAP_READ_TAG, "START command forwarded to BIOGAP after quiesc, resuming streaming");
             //xEventGroupClearBits(g_evt, B_SPI_QUIESCED);
             continue; // jump to the top of the loop
         }
@@ -336,7 +309,7 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
             if (node_state == STATE_STREAMING){
                 spi_slave_transaction_t *ret_trans = NULL;
-                esp_err_t ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+                ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
                 if (ret == ESP_ERR_TIMEOUT) {
                     continue;
                 }
@@ -367,6 +340,9 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 packet_count++;
 
                 /* Add packet to ringbuffer */
+                if(first_read == true){
+                    ESP_LOGI(BIOGAP_READ_TAG, "First transaction done");
+                }
                 ret = add_to_ringbuffer(rx_data, PACKET_SZ);
                 if (ret != ESP_OK) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
@@ -404,13 +380,6 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
     /* === CLEANUP === */
     ESP_LOGI(BIOGAP_READ_TAG, "Freeing pre-queued DMA buffers and exiting task");
-    if (sendbuf_persistent) {
-        free(sendbuf_persistent);
-    }
-    for (int i = 0; i < QUEUE_COUNT; i++) {
-        if (rx_bufs[i]) {
-            free(rx_bufs[i]);
-        }
-    }
+    free_prequeue_resources();
     vTaskDelete(NULL);
 }

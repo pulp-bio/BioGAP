@@ -12,7 +12,7 @@ static const char *COMMON_TAG = "[common.c]: ";
 spi_mode_t current_spi_mode = SPI_MODE_IDLE;
 
 /* Initialize ESP as SPI Slave, NRF will be the master */
-static esp_err_t init_nrf_spi_master_esp_slave_bus(void)
+esp_err_t init_nrf_spi_master_esp_slave_bus(void)
 {   
 
     // Configuration for the SPI bus

@@ -38,6 +38,8 @@ esp_err_t propagate_start_command_to_biogap_master();
 
 size_t prepare_buffer(uint8_t *buffer, uint32_t counter, uint16_t bytes_per_node);
 
+esp_err_t allocate_prequeue_resources(void); 
+esp_err_t free_prequeue_resources(void);
 #define ESP_SPI_HEADER 0x66             // Header byte for every ESP <--> NRF transaction, to verify correct data parsing
 #define ESP_SPI_TAILER 0xBB             // Tailer byte for every ESP <--> NRF transaction, to verify correct data parsing
 

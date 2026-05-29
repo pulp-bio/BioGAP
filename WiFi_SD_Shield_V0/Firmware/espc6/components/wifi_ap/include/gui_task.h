@@ -2,6 +2,7 @@
 #define GUI_TASK_H
 
 #include "softap_main.h"
+#include "biogap.h"
 
 #define RX_FROM_GUI_BUF_SIZE 20
 

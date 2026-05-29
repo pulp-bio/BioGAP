@@ -1,4 +1,5 @@
 #include "gui_task.h"
+#include "freertos/ringbuf.h"
 #define GUI_TAG "[gui_task.c]" 
 
 bool gui_connected = false;
@@ -8,6 +9,8 @@ uint8_t rx_data_from_gui[RX_FROM_GUI_BUF_SIZE] = {0};
 static TaskHandle_t rx_gui_task_handle = NULL;
 static esp_timer_handle_t start_sim_timer_handle = NULL;
 static esp_timer_handle_t stop_sim_timer_handle = NULL;
+
+
 
 static void start_sim_timer_callback(void *arg)
 {
@@ -92,17 +95,60 @@ esp_err_t bind_to_gui(void *pv)
 
 }
 
+static esp_err_t rb_soft_flush(RingbufHandle_t rb)
+{
+    if (rb == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t item_size = 0;
+    void *item = NULL;
+    size_t items_flushed = 0;
+    int empty_rounds = 0;
+
+    /* Keep draining until the ringbuffer stays empty for a few checks.
+     * This makes the flush robust against late in-flight enqueues.
+     */
+    for (int round = 0; round < 64; round++) {
+        bool drained_this_round = false;
+
+        while ((item = xRingbufferReceive(rb, &item_size, 0)) != NULL) {
+            vRingbufferReturnItem(rb, item);
+            items_flushed++;
+            drained_this_round = true;
+        }
+
+        UBaseType_t items_waiting = 0;
+        vRingbufferGetInfo(rb, NULL, NULL, NULL, NULL, &items_waiting);
+
+        if (!drained_this_round && items_waiting == 0) {
+            empty_rounds++;
+            if (empty_rounds >= 3) {
+                ESP_LOGI(GUI_TAG, "Soft-flushed ringbuffer completely, items=%u", (unsigned)items_flushed);
+                return ESP_OK;
+            }
+        } else {
+            empty_rounds = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    ESP_LOGW(GUI_TAG, "Ringbuffer flush reached retry limit, items=%u", (unsigned)items_flushed);
+    return ESP_OK;
+}
 
 // for now, just a tmp implementation
 void rx_from_gui(void *pvParameters)
 {
+    bool acquisition_start_and_stop_simulated = false;
     // Keeps on listening from the GUI
     // If stop command received -> forward stop command to the nodes
     // Receive data
     rx_gui_task_handle = xTaskGetCurrentTaskHandle();
     bool start_reported = false;
     bool stop_reported = false;
-
+    
     if (start_sim_timer_handle == NULL) {
         esp_timer_create_args_t start_timer_args = {
             .callback = start_sim_timer_callback,
@@ -139,7 +185,7 @@ void rx_from_gui(void *pvParameters)
         return;
     }
 
-    if (esp_timer_start_once(stop_sim_timer_handle,15  * 1000000LL) != ESP_OK) {
+    if (esp_timer_start_once(stop_sim_timer_handle,10  * 1000000LL) != ESP_OK) {
         ESP_LOGE(GUI_TAG, "Failed to start stop simulator timer");
         vTaskDelete(NULL);
         return;
@@ -165,7 +211,64 @@ void rx_from_gui(void *pvParameters)
             xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
             stop_reported = true;
             start_reported = false;
+            acquisition_start_and_stop_simulated = true;
         }
+
+        // check if we want to do it again
+        if(acquisition_start_and_stop_simulated){
+            acquisition_start_and_stop_simulated = false;
+            // REALLOCATE the resources for the next acquisition since the previous ones were freed during the STOP quiesce
+            xEventGroupWaitBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
+            esp_err_t ret = free_prequeue_resources();
+            // reinitialize completely the SPI slave
+            ret = spi_slave_free(SPI_HOST_DEVICE);
+            ESP_LOGI(GUI_TAG, "Freed pre-queue resources after STOP command");
+            // drain completely the ringbuffer
+            ret = rb_soft_flush(biogap_ringbuf);
+            if (ret != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to soft-flush BIOGAP ringbuffer");
+                vTaskDelete(NULL);
+                return;
+            }
+            xEventGroupClearBits(g_evt, B_RINGBUFFER_FULL);
+            ESP_LOGI(GUI_TAG, "BIOGAP Ringbuffer created with size %d bytes", RINGBUFF_SIZE);
+            // Set MUX to NRF mode (LOW = 0)
+
+            //gpio_reset_pin(NRF_SPI_MOSI_GPIO);
+            //gpio_reset_pin(NRF_SPI_MISO_GPIO);
+            //gpio_reset_pin(NRF_SPI_SCLK_GPIO);
+            // Small delay to let signal settle
+            esp_rom_delay_us(100);
+            ret = init_nrf_spi_master_esp_slave_bus();
+            if (ret != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to re-initialize NRF SPI bus"); 
+                vTaskDelete(NULL);
+                return;
+            }
+            ESP_LOGI(GUI_TAG, "Re-initialized NRF SPI bus for next acquisition");
+            current_spi_mode = SPI_MODE_NRF;
+            ret = allocate_prequeue_resources();
+            ESP_LOGI(GUI_TAG, "Re-allocated pre-queue resources for next acquisition");
+            if (ret != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to allocate pre-queue resources for new acquisition");
+                vTaskDelete(NULL);
+                return;
+            }
+            if (esp_timer_start_once(start_sim_timer_handle, 10 * 1000000LL) != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to restart start simulator timer");
+                vTaskDelete(NULL);
+                return;
+            }
+
+            if (esp_timer_start_once(stop_sim_timer_handle, 15 * 1000000LL) != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to restart stop simulator timer");
+                vTaskDelete(NULL);
+                return;
+            }
+            ESP_LOGI(GUI_TAG, "Dummy GUI timers re-armed: START in 10 s, STOP in 20 s");
+        }
+
+
     }
 }
 
