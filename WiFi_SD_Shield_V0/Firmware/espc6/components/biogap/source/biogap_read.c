@@ -342,6 +342,7 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 /* Add packet to ringbuffer */
                 if(first_read == true){
                     ESP_LOGI(BIOGAP_READ_TAG, "First transaction done");
+                    first_read = false;
                 }
                 ret = add_to_ringbuffer(rx_data, PACKET_SZ);
                 if (ret != ESP_OK) {

@@ -29,6 +29,7 @@ static void stop_sim_timer_callback(void *arg)
     if (rx_gui_task_handle != NULL) {
         xTaskNotifyGive(rx_gui_task_handle);
     }
+    ESP_LOGI(GUI_TAG, "STOP timer");
 }
 
 esp_err_t bind_to_gui(void *pv)
@@ -203,8 +204,8 @@ void rx_from_gui(void *pvParameters)
             ESP_LOGI(GUI_TAG, "Simulated receiving START command from GUI after 10 seconds");
         }
 
-        if (!stop_reported && (xEventGroupGetBits(g_evt) & B_STOP_CMD_RPT_PENDING)) {
-            ESP_LOGI(GUI_TAG, "Simulated receiving STOP command from GUI after 15 seconds From Timer");
+        if (xEventGroupGetBits(g_evt) & B_STOP_CMD_RPT_PENDING) {
+            ESP_LOGI(GUI_TAG, "Simulated receiving STOP command");
             rx_data_from_gui[0] = STOP_DUMMY_STREAMING;         // will be replaced by the actual STOP command later
             //sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
             xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_GUI);
@@ -254,6 +255,9 @@ void rx_from_gui(void *pvParameters)
                 vTaskDelete(NULL);
                 return;
             }
+            start_reported = false;
+            stop_reported = false;
+            xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI | B_STOP_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RPT_PENDING);
             if (esp_timer_start_once(start_sim_timer_handle, 10 * 1000000LL) != ESP_OK) {
                 ESP_LOGE(GUI_TAG, "Failed to restart start simulator timer");
                 vTaskDelete(NULL);
@@ -265,13 +269,45 @@ void rx_from_gui(void *pvParameters)
                 vTaskDelete(NULL);
                 return;
             }
+            xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
             ESP_LOGI(GUI_TAG, "Dummy GUI timers re-armed: START in 10 s, STOP in 20 s");
         }
-
-
     }
 }
 
+/** @brief Task to transmit data to the GUI 
+ * This task is responsible for draining the content of the ringbuffer and sending it to the GUI via WiFi.
+*/
+void tx_to_gui(void *pvParameters)
+{
+
+    while(1){
+        if(node_state == STATE_STREAMING){
+            size_t item_size = 0;
+            uint8_t *item = (uint8_t *)xRingbufferReceive(biogap_ringbuf, &item_size, portMAX_DELAY);
+
+            if(item !=NULL){
+                // send immediately to the gui
+                //int sent = send(gui_sock, item, item_size, 0);
+                int sent = 1; //hardcoded for now
+                if (sent < 0) {
+                    // item will stay in the ringbuffer since we havent' return it yet. 
+                    ESP_LOGE(GUI_TAG, "Failed to send data to GUI");
+                }
+                else{
+                    // remove the item from the ringbuffer only if it was sent successfully
+                    vRingbufferReturnItem(biogap_ringbuf, (void *)item);
+                }
+            }
+        }
+
+        else{
+            vTaskDelay(pdMS_TO_TICKS(100)); // Sleep for a while when not streaming to avoid busy loop
+        }
+    }
+
+    vTaskDelete(NULL);
+}
 // void rx_from_gui(void *pvParameters)
 // {
 //     // Keeps on listening from the GUI

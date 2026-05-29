@@ -133,6 +133,13 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "Created rx_from_gui task");
     }
 
+    xr = xTaskCreate(tx_to_gui, "tx_to_gui", 4096, NULL, 3, NULL);
+    if (xr != pdPASS) {
+        ESP_LOGE(MAIN_TAG, "Failed to create tx_to_gui task (err=%d)", xr);
+    } else {
+        ESP_LOGI(MAIN_TAG, "Created tx_to_gui task");
+    }
+
     #if defined IS_WBAN
         // To-Do: add this implementation 
         // xr= xTaskCreate(accept_nodes_task, "accept_nodes", ACCEPT_NODES_STACK_SIZE, NULL, 5, NULL); 
