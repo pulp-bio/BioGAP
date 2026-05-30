@@ -60,6 +60,56 @@ config SENSOR_EEG
 	  Enable support for EEG sensor. This will include the necessary drivers,
 	  state machine states, and data processing for EEG data acquisition.
 
+config SENSOR_WULPUS
+	bool "WULPUS ultrasound probe (MSP430 via SPI_B)"
+	default n
+	select NRFX_SPIM3
+	help
+	  Enables the WULPUS ultrasound probe interface. The nRF5340 acts as a
+	  BLE bridge between the MSP430 ultrasound controller and the WULPUS
+	  receiver dongle, 100% backwards-compatible with the nRF52
+	  WULPUS_PROBE_3 firmware.
+
+	  SPI_B pin assignment (BioGAP):
+	    SCK=P1.07  MOSI=P0.30  MISO=P0.29  CS=P1.08
+	  Control GPIOs:
+	    HOST_DATA_RDY=P1.13 (input, MSP430 → nRF5340)
+	    HOST_LINK_RDY=P0.27 (output, nRF5340 → MSP430)
+
+	  Protocol: 4 × 201-byte SPI transfers per US frame, forwarded as
+	  four BLE NUS notifications (202 + 201 + 201 + 201 bytes).
+
+config SENSOR_PPG_NEW
+	bool "Multi-sensor MAXM86161 PPG via TCA9548A I2C MUX"
+	default n
+	help
+	  Enable support for 1–8 MAXM86161 PPG sensors connected through a
+	  TCA9548A 8-channel I2C MUX on I2C_B (SCL=P1.10, SDA=P0.24).
+	  Sensors are configured simultaneously using MUX broadcast mode and
+	  sampled synchronously via a GPIO trigger pulse. Raw green/IR/red data
+	  is streamed per-channel over BLE NUS.
+
+if SENSOR_PPG_NEW
+
+config PPG_SENSOR_MASK
+	hex "Enabled PPG sensor channel bitmask (bits 0–7)"
+	default 0x01
+	help
+	  Bitmask selecting which TCA9548A channels have a MAXM86161 sensor.
+	  Bit 0 = channel 0 (MUX SD0/SC0), bit 7 = channel 7.
+	  Examples: 0x01 = one sensor on ch0; 0x03 = two sensors on ch0+ch1;
+	  0xFF = eight sensors on all channels.
+
+config PPG_SAMPLE_RATE
+	int "PPG sample rate (sps)"
+	default 125
+	range 125 500
+	help
+	  Desired PPG sample rate in samples per second. The GPIO sync timer
+	  period is derived from this value. Supported values: 125, 250, 500.
+
+endif # SENSOR_PPG_NEW
+
 menu "State Machine Configuration"
 
 config STATE_MACHINE_USE_CPU_IDLE
