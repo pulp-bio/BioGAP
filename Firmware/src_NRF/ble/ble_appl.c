@@ -32,10 +32,14 @@
 #include "bsp/system_status/system_status.h"
 #include "core/common.h"
 #include "core/sync_streaming.h"
+#include "sensors/ppg_new/ppg_new_appl.h"
 #include "sensors/eeg/eeg_appl.h"
 #include "sensors/imu/imu_appl.h"
 #include "sensors/imu/lis2duxs12_sensor.h"
 #include "sensors/mic/mic_appl.h"
+#if defined(CONFIG_SENSOR_WULPUS)
+#include "sensors/wulpus/wulpus_appl.h"
+#endif
 
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
@@ -228,6 +232,59 @@ static void handle_ble_command(uint8_t cmd) {
     emg_stop_streaming();
     ble_print_packet_stats(); /* Print BLE packet stats */
     break;
+
+  case START_PPG_STREAMING:
+    #if defined(CONFIG_SENSOR_PPG_NEW)
+    LOG_INF("Ping START_PPG_STREAMING");
+    ble_reset_packet_counters();
+    {
+      /*
+       * BLE packet layout (bytes after command code 39):
+       *   [1]  sensor_mask
+       *   [2]  sample_rate_hz
+       *   [3]  led_green     (0x00 = disable)
+       *   [4]  led_ir        (0x00 = disable)
+       *   [5]  led_red       (0x00 = disable)
+       *   [6]  led_range     (0–3 index)
+       *   [7]  tint          (0–3 index)
+       *   [8]  adc_range     (0–3 index)
+       *   [9]  sample_avg    (0–7 index)
+       *   [10] alc_enable    (0/1)
+       *   [11] proximity_enable (0/1)
+       * Total packet size: 12 bytes (cmd + 11 config bytes).
+       * If the packet is shorter than expected, missing bytes fall back to
+       * sensible defaults so the GUI can omit trailing optional params.
+       */
+      const uint8_t *d = ble_data_available.data;
+      uint16_t       n = ble_data_available.size;
+
+      ppg_config_t pcfg = {
+        .sensor_mask      = (n >  1) ? d[1]  : 0x01,
+        .sample_rate_hz   = (n >  2) ? d[2]  : 125,
+        .led_green        = (n >  3) ? d[3]  : 0x7F,
+        .led_ir           = (n >  4) ? d[4]  : 0x7F,
+        .led_red          = (n >  5) ? d[5]  : 0x7F,
+        .led_range        = (n >  6) ? d[6]  : 3,   /* default 32k */
+        .tint             = (n >  7) ? d[7]  : 3,   /* default 117.3 µs */
+        .adc_range        = (n >  8) ? d[8]  : 3,   /* default 32k */
+        .sample_avg       = (n >  9) ? d[9]  : 0,   /* default 1x */
+        .alc_enable       = (n > 10) ? d[10] : 1,   /* default on */
+        .proximity_enable = (n > 11) ? d[11] : 0,   /* default off */
+      };
+
+      ppg_new_start_streaming(&pcfg);
+    }
+    #endif
+    break;
+
+  case STOP_PPG_STREAMING:
+    #if defined(CONFIG_SENSOR_PPG_NEW)
+    LOG_INF("Ping STOP_PPG_STREAMING");
+    ppg_new_stop_streaming();
+    //ble_print_packet_stats(); /* Print BLE packet stats */
+    #endif
+    break;
+
   case START_MIC_STREAMING:
     LOG_INF("Ping START_MIC_STREAMING");
     mic_start_streaming();
@@ -275,6 +332,35 @@ static void handle_ble_command(uint8_t cmd) {
   case STOP_IMU_STREAMING:
     LOG_DBG("Ping STOP_IMU_STREAMING");
     imu_stop_streaming();
+    break;
+
+#if defined(CONFIG_SENSOR_WULPUS)
+  case START_WULPUS_STREAMING:
+    LOG_INF("Ping START_WULPUS_STREAMING");
+    /* Any bytes after the command code are forwarded as MSP430 config */
+    wulpus_set_msp_config(
+        ble_data_available.size > 1 ? ble_data_available.data + 1 : NULL,
+        ble_data_available.size > 1 ? ble_data_available.size - 1 : 0);
+    break;
+
+  case STOP_WULPUS_STREAMING:
+    LOG_INF("Ping STOP_WULPUS_STREAMING");
+    wulpus_stop();
+    break;
+#endif
+
+  default:
+    /*
+     * Command code not recognised – treat the full payload as MSP430
+     * configuration for the WULPUS dongle (which sends raw config bytes
+     * without a preceding command code, exactly as the old nRF52 firmware).
+     */
+#if defined(CONFIG_SENSOR_WULPUS)
+    LOG_INF("Unrecognised cmd %u – treating as WULPUS MSP430 config", cmd);
+    wulpus_set_msp_config(ble_data_available.data, ble_data_available.size);
+#else
+    LOG_WRN("Unrecognised BLE command: %u", cmd);
+#endif
     break;
   }
 }

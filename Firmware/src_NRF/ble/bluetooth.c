@@ -186,27 +186,6 @@ static void advertise(struct k_work *work) {
 
   bt_le_adv_stop();
 
-  if (IS_ENABLED(CONFIG_SETTINGS)) {
-    settings_load();
-  }
-
-  err = bt_enable(NULL);
-  if (err) {
-    LOG_ERR("Bluetooth init failed (err %d)", err);
-  }
-
-  LOG_INF("Bluetooth initialized");
-
-  if (IS_ENABLED(CONFIG_SETTINGS)) {
-    settings_load();
-  }
-
-  err = bt_nus_init(&nus_cb);
-  if (err) {
-    LOG_ERR("Failed to initialize UART service (err: %d)", err);
-    return;
-  }
-
   err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
   if (err) {
     LOG_ERR("Advertising failed to start (err %d)", err);
@@ -365,9 +344,20 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 static void bt_ready(int err) {
   if (err != 0) {
     LOG_ERR("Bluetooth failed to initialise: %d", err);
-  } else {
-    k_work_submit(&advertise_work);
+    return;
   }
+
+  if (IS_ENABLED(CONFIG_SETTINGS)) {
+    settings_load();
+  }
+
+  err = bt_nus_init(&nus_cb);
+  if (err) {
+    LOG_ERR("Failed to initialize UART service (err: %d)", err);
+    return;
+  }
+
+  k_work_submit(&advertise_work);
 }
 
 /*==============================================================================

@@ -45,6 +45,15 @@ int pwr_bsp_init();
 int pwr_bsp_start();
 int pwr_charge_enable();
 
+
+/**
+ * @brief Power on WULPUS shield.
+ * 
+ * @return 0 on success, negative on error.
+ */
+int wulpus_power_on(void);
+
+
 extern bool flag_isr_soft_reset;
 
 #endif /* PWR_BSP_H_ */
