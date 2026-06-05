@@ -122,6 +122,43 @@ int pwr_charge_enable()
     return max77654_config(&pmic_h);
 }
 
+
+int wulpus_power_on(void) {
+    // Currently, there are no specific power configurations needed for the WULPUS shield
+    // This function is a placeholder for any future power management related to the shield
+    LOG_INF("WULPUS shield power on");
+    struct max77654_conf *pmic_conf = &pmic_h.conf;
+
+    // VA0 set to 3.3V
+    pmic_conf->ldo_conf[0].mode = MAX77654_LDO_MODE_LDO;
+    pmic_conf->ldo_conf[0].active_discharge = false;
+    pmic_conf->ldo_conf[0].en = MAX77654_REG_ON;
+    pmic_conf->ldo_conf[0].output_voltage_mV = 3300;
+
+    max77654_config(&pmic_h);
+    k_msleep(100);
+
+    // VD0 set to 5V
+    pmic_conf->sbb_conf[0].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[0].active_discharge = false;
+    pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[0].output_voltage_mV = 5000;
+
+    max77654_config(&pmic_h);
+    k_msleep(100);
+
+    // VD2 set to 3.3V
+    pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[2].active_discharge = false;
+    pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
+
+    max77654_config(&pmic_h);
+    return 0;
+}
+
 int pwr_bsp_start() {
   // Configure PMIC
   struct max77654_conf *pmic_conf = &pmic_h.conf;

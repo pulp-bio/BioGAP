@@ -52,3 +52,70 @@ dmic_dev: &pdm0 {
 //         };
 //     };
 // };
+
+/*
+ * Multi-PPG sensor subsystem GPIOs (SWAPPED)
+ *
+ * ppg_sync  – P0.31, active-low output.
+ *   Connect to all MAXM86161 GPIO inputs (shorted together).
+ *   A falling-edge pulse triggers simultaneous sample acquisition.
+ *
+ * ppg_intb  – P0.12, active-low input (open-drain wired-OR).
+ *   All MAXM86161 INTB outputs are shorted here; goes low when any sensor
+ *   FIFO reaches the configured threshold (i.e. all sensors, since they are
+ *   triggered synchronously).
+ *   NOTE: P0.12 is shared with the PDM microphone DATA line in this overlay.
+ */
+/*
+ * WULPUS ultrasound sensor control GPIOs
+ *
+ *   HOST_DATA_RDY – P1.13, active-high input (open-drain from MSP430).
+ *     Rising edge signals that the MSP430 has a new US frame ready.
+ *
+ *   HOST_LINK_RDY – P0.27, active-high output.
+ *     Driven HIGH by the nRF5340 once the BLE link is up and the MSP430
+ *     configuration has been received, telling the MSP430 to start sending.
+ *
+ * SPI_B pins are configured directly by the NRFX SPIM1 driver in wulpus_appl.c
+ * and therefore require no device-tree entries:
+ *   SCK=P1.07  MOSI=P0.30  MISO=P0.29  CS=P1.08
+ */
+/ {
+    wulpus_gpios {
+        compatible = "gpio-keys";
+        wulpus_host_data_rdy: wulpus_host_data_rdy {
+            gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
+            label = "WULPUS HOST_DATA_RDY";
+        };
+        wulpus_host_link_rdy: wulpus_host_link_rdy {
+            gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+            label = "WULPUS HOST_LINK_RDY";
+        };
+    };
+};
+
+/ {
+    ppg_gpios {
+        compatible = "gpio-keys";
+        ppg_sync: ppg_sync {
+            gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
+            label = "PPG GPIO Sync Trigger";
+        };
+        ppg_intb: ppg_intb {
+            gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+            label = "PPG INTB Wired-OR";
+        };
+        ppg_debug: ppg_debug_gpio {
+            gpios = <&gpio0 25 GPIO_ACTIVE_HIGH>;
+            label = "PPG Debug Toggle";
+        };
+    };
+};
+
+/*
+ * I2C_B (i2c1) bus speed configuration
+ * SCL=P1.10, SDA=P0.24
+ */
+&i2c1 {
+    clock-frequency = <400000>;  /* 400 kHz */
+};

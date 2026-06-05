@@ -53,6 +53,12 @@
 #include "sensors/imu/imu_appl.h"
 #include "sensors/mic/mic_appl.h"
 #include "sensors/eeg/eeg_appl.h"
+#if defined(CONFIG_SENSOR_PPG_NEW)
+#include "sensors/ppg_new/ppg_new_appl.h"
+#endif
+#if defined(CONFIG_SENSOR_WULPUS)
+#include "sensors/wulpus/wulpus_appl.h"
+#endif
 
 // Inter-board hardware synchronization
 #include "core/board_sync.h"
@@ -89,9 +95,9 @@ int main(void) {
     LOG_ERR("PWR Init failed!");
   }
   // pwr_start();
-  if (pwr_bsp_start()) {
-    LOG_ERR("PWR BSP Start failed!");
-  }
+  //if (pwr_bsp_start()) {
+  //  LOG_ERR("PWR BSP Start failed!");
+  //}
 
   if (!device_is_ready(uart_dev)) {
     LOG_ERR("CDC ACM device not ready");
@@ -103,16 +109,16 @@ int main(void) {
   }
   LOG_INF("USB enabled");
 
-  LOG_INF("Enabling charge...");
+//  LOG_INF("Enabling charge...");
   pwr_charge_enable();
-  LOG_INF("Initializing ADS...");
+//  LOG_INF("Initializing ADS...");
   ret = ads_dr_init();
 
-  LOG_INF("Initializing SPI...");
+//  LOG_INF("Initializing SPI...");
   init_spi();
 
   LOG_INF("Powering GAP9...");
-  gap9_pwr(true);
+ // gap9_pwr(true);
   LOG_INF("GAP9 powered up");
 
   struct uart_data_t *buf = k_malloc(sizeof(*buf));
@@ -121,11 +127,11 @@ int main(void) {
 
   // Initialize microphone
   LOG_INF("Initializing microphone...");
-  if (mic_init() != 0) {
-    LOG_WRN("Microphone initialization failed - mic streaming disabled");
-  } else {
-    LOG_INF("Microphone initialized");
-  }
+  //if (mic_init() != 0) {
+  //  LOG_WRN("Microphone initialization failed - mic streaming disabled");
+  //} else {
+  //  LOG_INF("Microphone initialized");
+ // }
 
   // Initialize IMU (LIS2DUXS12 accelerometer)
   LOG_INF("Initializing IMU...");
@@ -155,16 +161,40 @@ int main(void) {
   }
 #endif
 
+#if defined(CONFIG_SENSOR_PPG_NEW)
+  // Initialize multi-PPG subsystem (MAXM86161 × N via TCA9548A MUX)
+  LOG_INF("Initializing PPG subsystem...");
+  if (ppg_new_init() != 0) {
+    LOG_WRN("PPG init failed - PPG streaming disabled");
+  } else {
+    LOG_INF("PPG subsystem initialized");
+  }
+#endif
+
+#if defined(CONFIG_SENSOR_WULPUS)
+  // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge)
+  LOG_INF("Initializing WULPUS...");
+  k_msleep(5000); // Main thread can sleep now, all the work is handeled by other threads
+  wulpus_power_on();
+  wulpus_init();
+  LOG_INF("WULPUS initialized");
+#endif
+
   // Initialize inter-board synchronization
   LOG_INF("Initializing board sync...");
-  if (board_sync_init() != 0) {
-    LOG_WRN("Board sync initialization failed - inter-board sync disabled");
-  } else {
-    LOG_INF("Board sync initialized");
-  }
+//  if (board_sync_init() != 0) {
+ //   LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+ //} else {
+ //   LOG_INF("Board sync initialized");
+  //}
 
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
+    //gpio_pin_set_dt(&ppg_sync_gpio, 1);
+    //k_msleep(1000);
+    //gpio_pin_set_dt(&ppg_sync_gpio, 0);
+
+
     if (flag_isr_soft_reset) {
       // Soft reset the device
       // Put PMIC into factory reset
