@@ -31,7 +31,6 @@ This firmware runs on the **Nordic Semiconductor nRF5340** dual-core SoC and pro
 - [Architecture Overview](./architecture.md) - System architecture, threading model, and data flow
 
 ### Modules
-- [AFE Module](./afe_module.md) - ADS1298 Analog Front-End driver (SPI, register configuration, data capture)
 - [BLE Module](./ble_module.md) - BLE connectivity, NUS service, connection management, and streaming
 - [BLE Protocol](./ble_protocol.md) - BLE command protocol specification (command codes and packet formats)
 - [Sensor Modules](./sensor_modules.md) - EEG, EMG, IMU, Microphone, and PPG acquisition threads
