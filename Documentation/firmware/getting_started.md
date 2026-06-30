@@ -1,149 +1,139 @@
-This document provides instruction on how to get started with the firmware, including building, flashing, and running the application on the nRF5340.
+# Getting Started
 
-# Cloning the SENSEI-SDK
+This guide covers how to set up the development environment, clone the required repositories, build the firmware, and flash it onto the BioGAP mainboard.
 
-In order to build the firmware, you first need to clone the SENSEI-SDK repository, which contains the necessary Zephyr board support package and other dependencies.
+## Prerequisites
+
+- **nRF Connect SDK** (NCS) v2.x with Zephyr RTOS
+- **Visual Studio Code** with the nRF Connect for VS Code extension (recommended)
+- **SEGGER J-Link** debugger (or the BioGAP Debug Board)
+- **Python 3.10+** with west build tool
+- Git
+
+## Step 1: Clone the SENSEI-SDK
+
+The firmware depends on the SENSEI-SDK, which provides the Zephyr board support package for the custom `nrf5340_senseiv1` board and all third-party dependencies.
 
 ```bash
 git clone https://github.com/pulp-bio/sensei-sdk.git
-```
-
-Then move to the `sensei-sdk` folder:
-
-```bash
 cd sensei-sdk
-```
-
-Now you need to update the submodules to clone all the necessary third-party dependencies:
-
-```bash
 git submodule update --init --recursive
 ```
 
-# Cloning the BioGAP Repository
-Now you need to clone the BioGAP repository, which contains the firmware source code and the custom modifications for the SENSEI-SDK.
+Set the `SENSEI_SDK_ROOT` environment variable to point to this directory:
+
+```bash
+export SENSEI_SDK_ROOT=/path/to/sensei-sdk
+```
+
+## Step 2: Clone the BioGAP Repository
 
 ```bash
 git clone https://github.com/pulp-bio/BioGAP.git
 ```
 
-Then move to the `BioGAP` folder:
+## Step 3: Integrate Custom Files into the SENSEI-SDK
+
+The BioGAP firmware requires custom device tree bindings and shield definitions that are not part of the base SENSEI-SDK. These are provided in the `Firmware/` directory.
+
+### Copy Custom Device Tree Bindings
+
+The ADS1298 AFE binding must be added to the SDK:
 
 ```bash
-cd BioGAP
+cp -r Firmware/custom_dts/* $SENSEI_SDK_ROOT/NRF/dts/bindings
 ```
 
-# Adapting the SENSEI-SDK for BioGAP
+### Copy Custom Shield Definitions
 
-The cloned SENSEI-SDK is not ready to be used for the BioGAP firmware. For this reason, inside this repository, under `Firmware/` you will find two folders: 
-
-- `custom_dts`: Contains a custom file for the Analog Front-End (AFE)
-- `custom_shields`: Contains the custom shield definitions for the ExG (EEG/EMG) and PPG sensors.
-
-You need to copy the content of these two folders into the corresponding folders in the `sensei-sdk` repository.
-
-First move to the BioGAP directory:
+The ExG and PPG shield overlays must be added to the SDK:
 
 ```bash
-cd BioGAP
+cp -r Firmware/custom_shields/* $SENSEI_SDK_ROOT/NRF/boards/shields
 ```
 
-```bash
-cp -r Firmware/custom_dts/* ~/sensei-sdk/NRF/dts/bindings
-cp -r Firmware/custom_shields/* ~/sensei-sdk/NRF/boards/shields
-```
+## Step 4: Modify the SENSEI-SDK Device Tree
 
-This will copy the custom device tree source files and the custom shield definitions into the SENSEI-SDK, allowing you to build the firmware for the BioGAP hardware.
-
-Additionally you have to do some modification to the `sensei-sdk/NRF/boards/arm/nrf5340_senseiv1/nrf5340_senseiv1_cpuapp.dts`.
-
-First you need to comment the alias of the UART. The following snippet of code:
-```
-	aliases {
-		i2ca = &i2c0;
-		i2cb = &i2c1;
-		uartgap = &uart_gap;
-	};
-```
-
-Should become:
-```
-    aliases {
-        i2ca = &i2c0;
-        i2cb = &i2c1;
-        // uartgap = &uart_gap;
-    };
-```
-
-Then, just under the modification you need to add the following lines:
+The base SENSEI-SDK device tree file needs modifications to support the BioGAP hardware. Edit the file:
 
 ```
-	buttons{
-		gpio_lis2duxs12_int1: gpio_lis2duxs12_int1 {
-			gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>;
-			label = "LIS2DUXS12_INT";
-		};
-		gpio_soft_rst: gpio_soft_rst {
-			gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
-			label = "BUTTON_SOFT_INT";
-		};
-	};
+$SENSEI_SDK_ROOT/NRF/boards/arm/nrf5340_senseiv1/nrf5340_senseiv1_cpuapp.dts
 ```
 
-So the final code should look something like this:
+### 4a. Comment out the UART GAP alias
 
-```
-	aliases {
-		i2ca = &i2c0;
-		i2cb = &i2c1;
-		// uartgap = &uart_gap;
-	};
-	buttons{
-		gpio_lis2duxs12_int1: gpio_lis2duxs12_int1 {
-			gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>;
-			label = "LIS2DUXS12_INT";
-		};
-		gpio_soft_rst: gpio_soft_rst {
-			gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
-			label = "BUTTON_SOFT_INT";
-		};
-	};
-```
+Change the `aliases` block from:
 
-Then you need to comment out the following lines:
-
-```
-	uart_gap_default: uart0_default {
-		group1 {
-			psels = <NRF_PSEL(UART_TX, 1, 0)>,
-				<NRF_PSEL(UART_RX, 1, 1)>;
-		};
-	};
-
-	uart_gap_sleep: uart0_sleep {
-		group1 {
-			psels = <NRF_PSEL(UART_TX, 1, 0)>,
-				<NRF_PSEL(UART_RX, 1, 1)>;
-			low-power-enable;
-		};
-	};
-```
-
-Finally, you also need to comment out these lines:
-
-```
-uart_gap: &uart3{
-	status = "okay";
-	current-speed = <115200>;
-
-	pinctrl-0 = <&uart_gap_default>;
-	pinctrl-1 = <&uart_gap_sleep>;
-	pinctrl-names = "default", "sleep";
+```dts
+aliases {
+    i2ca = &i2c0;
+    i2cb = &i2c1;
+    uartgap = &uart_gap;
 };
 ```
-After these modifications, the SENSEI-SDK should be ready to be used for building the BioGAP firmware.
 
-# Building the Firmware
+To:
+
+```dts
+aliases {
+    i2ca = &i2c0;
+    i2cb = &i2c1;
+    // uartgap = &uart_gap;
+};
+```
+
+### 4b. Add GPIO button definitions
+
+Add the following block immediately after the `aliases` block:
+
+```dts
+buttons {
+    gpio_lis2duxs12_int1: gpio_lis2duxs12_int1 {
+        gpios = <&gpio0 23 GPIO_ACTIVE_HIGH>;
+        label = "LIS2DUXS12_INT";
+    };
+    gpio_soft_rst: gpio_soft_rst {
+        gpios = <&gpio0 26 GPIO_ACTIVE_HIGH>;
+        label = "BUTTON_SOFT_INT";
+    };
+};
+```
+
+### 4c. Comment out the UART3 pin control
+
+Comment out the `uart_gap_default` and `uart_gap_sleep` pin control groups:
+
+```dts
+// uart_gap_default: uart0_default {
+//     group1 {
+//         psels = <NRF_PSEL(UART_TX, 1, 0)>,
+//                 <NRF_PSEL(UART_RX, 1, 1)>;
+//     };
+// };
+//
+// uart_gap_sleep: uart0_sleep {
+//     group1 {
+//         psels = <NRF_PSEL(UART_TX, 1, 0)>,
+//                 <NRF_PSEL(UART_RX, 1, 1)>;
+//         low-power-enable;
+//     };
+// };
+```
+
+### 4d. Comment out the UART3 node definition
+
+Comment out the `uart_gap` node at the bottom of the file:
+
+```dts
+// uart_gap: &uart3 {
+//     status = "okay";
+//     current-speed = <115200>;
+//     pinctrl-0 = <&uart_gap_default>;
+//     pinctrl-1 = <&uart_gap_sleep>;
+//     pinctrl-names = "default", "sleep";
+// };
+```
+
+## Step 5: Build the Firmware
 
 Once everything is set up, you can build the firmware. The instruction are exactly the same as the one provided in the [SENSEI-SDK repository](https://github.com/pulp-bio/sensei-sdk).
-
