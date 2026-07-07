@@ -8,19 +8,23 @@
  *           thread reads each enabled MUX channel → sends BLE packets
  *  stop  → stop timer, deselect MUX
  *
- * BLE packet format – one packet covers ALL active sensors and LEDs:
+ * BLE packet format – fixed 202 bytes, one packet covers ALL active sensors and LEDs:
  *   [0x70][cnt_lo][cnt_hi][ts×4][sensor_mask][led_mask][trigger]
  *   Sample 1: [ch0_G,ch0_IR,ch0_R][ch1_G,...] ... (active sensors only)
  *   Sample 2: ...
  *   Sample 3: ...
  *   Sample 4: ...
- *   [0x71]
+ *   [zero padding to reach 202 bytes total]
+ *
+ *   The 0x71 trailer is omitted; the decoder uses sensor_mask/led_mask to
+ *   determine the valid data extent.  Fixed size allows the biogui to use a
+ *   single packetSize=202 for both PPG and WULPUS packets on the same stream.
  *
  *   led_mask bits: 0=green, 1=IR, 2=red.  sensor_mask: bit N = sensor N active.
  *   trigger: GPIO state (0 or 1) of ppg_debug_gpio at packet assembly time.
  *   Each ADC value: 19-bit >> 3 → 16-bit, little-endian.
  *   Only bytes for active sensors/LEDs are emitted; disabled ones are omitted.
- *   Worst case (8 sensors, 3 LEDs, 4 samples): 1+2+4+1+1+1 + 4×8×6 + 1 = 203 B.
+ *   Always 202 B (zero-padded); worst-case data is 8 sensors × 3 LEDs × 4 samples × 2 B = 192 B.
  */
 
 #include "sensors/ppg_new/ppg_new_appl.h"
@@ -57,13 +61,17 @@ LOG_MODULE_REGISTER(ppg_new, LOG_LEVEL_INF);
 #define PPG_PROX_TIMEOUT_MS 10000U
 
 /*
- * Worst-case packet size (8 sensors, 3 LEDs, 4 samples, 16-bit values):
+ * Worst-case data payload (8 sensors, 3 LEDs, 4 samples, 16-bit values):
  *   header(1) + counter(2) + timestamp(4) + sensor_mask(1) + led_mask(1) + trigger(1)
- *   + PPG_SAMPLES_PER_PKT × 8 sensors × 3 LEDs × 2 bytes + trailer(1)
- *   = 1+2+4+1+1+1 + 4×8×6 + 1 = 203 bytes (fits in 251-byte BLE ATT MTU)
+ *   + PPG_SAMPLES_PER_PKT × 8 sensors × 3 LEDs × 2 bytes = 202 bytes maximum.
+ * The buffer is sized to PPG_BLE_PKT_SIZE (211) to match EEG_PCKT_SIZE; the
+ * tail is zero-padded.  PPG_PKT_SIZE_MAX is kept for documentation only.
  */
 #define PPG_PKT_SIZE_MAX  (1U + 2U + 4U + 1U + 1U + 1U + \
-                           PPG_SAMPLES_PER_PKT * I2C_MUX_MAX_CHANNELS * 3U * 2U + 1U)
+                           PPG_SAMPLES_PER_PKT * I2C_MUX_MAX_CHANNELS * 3U * 2U)
+
+/** Fixed BLE packet size – matches EEG_PCKT_SIZE and WULPUS_BLE_PKT_SIZE (all 211). */
+#define PPG_BLE_PKT_SIZE  211U
 
 #define PPG_DATA_HEADER  0x70U
 #define PPG_DATA_TRAILER 0x71U
@@ -133,8 +141,8 @@ static uint16_t ppg_debug_toggle_cnt;
 /* Software mirror of debug GPIO state. Use when physical read is unreliable. */
 static bool ppg_debug_state;
 
-/* TX buffer sized for worst-case packet. */
-static uint8_t ppg_tx_buf[PPG_PKT_SIZE_MAX];
+/* TX buffer sized to the fixed BLE packet size (includes zero-padding tail). */
+static uint8_t ppg_tx_buf[PPG_BLE_PKT_SIZE];
 
 /*
  * Per-channel dequeued sample storage.
@@ -255,6 +263,9 @@ static void ppg_send_combined_packet(void)
 {
     const ppg_config_t *cfg = &ppg_runtime_cfg;
 
+    /* Zero the whole buffer first so unused bytes are padding, not stale data. */
+    memset(ppg_tx_buf, 0, PPG_BLE_PKT_SIZE);
+
     uint8_t led_mask = ((cfg->led_green != 0) ? 0x01U : 0U)
                      | ((cfg->led_ir    != 0) ? 0x02U : 0U)
                      | ((cfg->led_red   != 0) ? 0x04U : 0U);
@@ -310,8 +321,8 @@ static void ppg_send_combined_packet(void)
         }
     }
 
-    ppg_tx_buf[idx++] = PPG_DATA_TRAILER;
-    add_data_to_send_buffer(ppg_tx_buf, idx);
+    /* No trailer byte — fixed-size packet; decoder uses sensor_mask to find data end. */
+    add_data_to_send_buffer(ppg_tx_buf, PPG_BLE_PKT_SIZE);
 }
 
 /*==============================================================================

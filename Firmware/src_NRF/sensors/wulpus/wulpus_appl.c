@@ -284,14 +284,20 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
  *
  * Drains the ring buffer and enqueues 4 BLE NUS notifications per frame.
  * Each BLE packet is framed with a one-byte header followed by one SPI
- * transfer chunk:
- *   packet 0 : 0x10 + 201 bytes
- *   packet 1 : 0x11 + 201 bytes
- *   packet 2 : 0x12 + 201 bytes
- *   packet 3 : 0x13 + 201 bytes
+ * transfer chunk, zero-padded to the shared BLE packet size:
+ *   packet 0 : 0x10 + 201 bytes payload + 9 zero bytes = 211 bytes total
+ *   packet 1 : 0x11 + 201 bytes payload + 9 zero bytes = 211 bytes total
+ *   packet 2 : 0x12 + 201 bytes payload + 9 zero bytes = 211 bytes total
+ *   packet 3 : 0x13 + 201 bytes payload + 9 zero bytes = 211 bytes total
+ *
+ * 211 bytes matches EEG_PCKT_SIZE so the biogui can use a single
+ * packetSize=211 for both WULPUS and EEG/EMG on the same stream.
  *============================================================================*/
 #define WULPUS_BLE_STACK_SIZE  2048
 #define WULPUS_BLE_PRIORITY    5
+
+/** Standardized BLE packet size – must equal EEG_PCKT_SIZE (211). */
+#define WULPUS_BLE_PKT_SIZE  (WULPUS_BYTES_PER_XFER + 1U + 9U)
 
 static void wulpus_ble_thread(void *a, void *b, void *c)
 {
@@ -299,7 +305,9 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
 
     LOG_INF("WULPUS BLE thread started");
 
-    uint8_t ble_packet[WULPUS_BYTES_PER_XFER + 1];
+    uint8_t ble_packet[WULPUS_BLE_PKT_SIZE];
+    /* Zero once — bytes [202..210] are padding and never overwritten. */
+    memset(ble_packet, 0, WULPUS_BLE_PKT_SIZE);
 
     while (1) {
         k_sem_take(&wulpus_ble_ready_sem, K_FOREVER);
@@ -310,22 +318,22 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
          ble_packet[0] = WULPUS_BLE_HDR_XFER_0;
          memcpy(&ble_packet[1], m_rx_buf[base + 0].buffer,
              WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BYTES_PER_XFER + 1);
+         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
          ble_packet[0] = WULPUS_BLE_HDR_XFER_1;
          memcpy(&ble_packet[1], m_rx_buf[base + 1].buffer,
              WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BYTES_PER_XFER + 1);
+         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
          ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
          memcpy(&ble_packet[1], m_rx_buf[base + 2].buffer,
              WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BYTES_PER_XFER + 1);
+         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
          ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
          memcpy(&ble_packet[1], m_rx_buf[base + 3].buffer,
              WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BYTES_PER_XFER + 1);
+         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
             buffer_content--;
             current_buffer++;
@@ -400,6 +408,17 @@ void wulpus_init(void)
     }
 
     LOG_INF("WULPUS initialized – HOST_LINK_RDY LOW, waiting for MSP430 config via BLE");
+
+    /* Race-condition guard: if a BLE config packet arrived before wulpus_init()
+     * ran (possible when the host connects quickly and sends the combined
+     * EEG+WULPUS start sequence before the 5-second boot delay completes),
+     * wulpus_set_msp_config() will have set wulpus_active=true and asserted
+     * HOST_LINK_RDY HIGH – but gpio_pin_configure_dt() above just reset it LOW.
+     * Re-assert here now that SPI and the GPIO ISR are fully set up. */
+    if (wulpus_active) {
+        gpio_pin_set_dt(&host_link_rdy, 1);
+        LOG_INF("WULPUS: pre-init config detected – HOST_LINK_RDY re-asserted");
+    }
 }
 
 void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
