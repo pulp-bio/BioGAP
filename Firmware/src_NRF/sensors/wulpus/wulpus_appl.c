@@ -32,13 +32,13 @@
  * Zephyr on the nRF5340. It preserves the full BLE / SPI packet protocol
  * so the existing WULPUS receiver dongle works without modification.
  *
- * Protocol summary (identical to old nRF52 firmware):
+ * Protocol summary:
  *   - MSP430 signals a new US frame by asserting HOST_DATA_RDY (rising edge).
  *   - nRF5340 performs 4 × 201-byte full-duplex SPI transfers over SPI_B.
  *   - The received frame (4 × 201 bytes) is forwarded via BLE NUS as four
- *     notifications:
- *       notification 0 : 202 bytes  (201 + 1 byte overlap into next slot)
- *       notifications 1-3 : 201 bytes each
+ *     211-byte notifications, each = 7-byte header/counter/timestamp prefix
+ *     + one 201-byte SPI chunk + 3 reserved bytes (see WULPUS_META_* and the
+ *     BLE forwarding thread).
  *   - Ring buffer holds up to WULPUS_MAX_FRAMES complete US frames.
  *   - The same TX buffer (MSP430 configuration) is used for all 4 SPI TXs.
  *
@@ -52,6 +52,7 @@
 
 #include "sensors/wulpus/wulpus_appl.h"
 #include "ble/ble_appl.h"
+#include "bsp/pwr_bsp.h"
 
 #include <nrfx_spim.h>
 #include <zephyr/device.h>
@@ -81,20 +82,29 @@ LOG_MODULE_REGISTER(wulpus, LOG_LEVEL_INF);
 /** @brief Maximum number of buffered US frames */
 #define WULPUS_MAX_FRAMES       35
 
+/** @brief Settle time after enabling the WULPUS rails (VA0/VD0/VD2) before
+ *  talking to the MSP430: rail ramp + MSP430 boot. */
+#define WULPUS_POWERUP_DELAY_MS 300
+
 /*==============================================================================
  * NRFX SPIM1 configuration
  *============================================================================*/
 
 /**
- * @brief NRFX SPIM instance index.
+ * @brief NRFX SPIM instance index (SPI_B of the BioGAP mainboard).
  *
- * nRF5340 serial-peripheral IRQ sharing:
- *   SERIAL0 (IRQ 8): SPIM0/TWIM0/UARTE0  – TWIM0 used by I2C0 (RGB LED)
- *   SERIAL1 (IRQ 9): SPIM1/TWIM1/UARTE1  – TWIM1 used by I2C1 (PPGShield)
- *   SERIAL2 (IRQ10): SPIM2/TWIM2/UARTE2  – SPIM2 used by ADS1298
- *   SERIAL3 (IRQ11): SPIM3/TWIM3/UARTE3  – all free → use this one
+ * nRF5340 serial-peripheral (serial-box) sharing:
+ *   SERIAL0 (IRQ 8): SPIM0/TWIM0/UARTE0  – TWIM0 used by I2C_A (PMIC/LED/IMU)
+ *   SERIAL1 (IRQ 9): SPIM1/TWIM1/UARTE1  – TWIM1 used by I2C_B (PPG shield)
+ *   SERIAL2 (IRQ10): SPIM2/TWIM2/UARTE2  – SPIM2 = SPI_B (this driver)
+ *   SERIAL3 (IRQ11): SPIM3/TWIM3/UARTE3  – kept free so UART3 remains
+ *                                          available for the GAP9 UART
+ *   SPIM4   (IRQ12): dedicated high-speed – SPIM4 = SPI_A (ADS1298)
+ *
+ * Pins must match the spi_b_default pinctrl in the board DTS
+ * (nrf5340_senseiv1_cpuapp.dts).
  */
-#define WULPUS_SPIM_INST_IDX    3
+#define WULPUS_SPIM_INST_IDX    2
 
 /** @brief SPI interrupt priority (same as ADS1298 driver) */
 #define WULPUS_SPI_INT_PRIO     2
@@ -128,12 +138,14 @@ typedef struct {
  * Laid out as a flat array of (WULPUS_NUMBER_OF_XFERS * WULPUS_MAX_FRAMES)
  * contiguous slots.  Frame N occupies slots [N*4 .. N*4+3].
  *
- * The first BLE notification of each frame deliberately sends 202 bytes
- * (WULPUS_BYTES_PER_XFER + 1) starting from slot[N*4 + 0].buffer[0],
- * which reads the 201 bytes of that slot plus 1 byte from the start of
- * slot[N*4 + 1] – exactly replicating the original nRF52 send_pending_frames().
+ * Each slot's 201 SPI bytes are copied into one BLE packet at offset
+ * WULPUS_SPI_OFF (byte 7), behind the header/counter/timestamp prefix.
  *============================================================================*/
 static wulpus_xfer_buf_t m_rx_buf[WULPUS_NUMBER_OF_XFERS * WULPUS_MAX_FRAMES];
+
+/** @brief Per-frame acquisition timestamp (µs), captured in the SPI thread when
+ *  the frame is received, so the ring-buffer queueing delay does not skew it. */
+static uint32_t m_frame_ts[WULPUS_MAX_FRAMES];
 
 /** @brief SPI TX buffer – holds MSP430 configuration, repeated for all 4 TXs */
 static uint8_t m_tx_buf[WULPUS_BYTES_PER_XFER];
@@ -147,6 +159,14 @@ static uint8_t m_tx_buf[WULPUS_BYTES_PER_XFER];
 static volatile int buffer_counter = 0;
 static volatile int current_buffer = 0;
 static volatile int buffer_content = 0;
+
+/*
+ * Per-frame BLE packet counter, written into each frame's padding tail
+ * (mirrors the EEG/EMG packet counter). Reset in wulpus_set_msp_config()
+ * whenever a new config/restart is received, so each streaming session
+ * starts from 0 like the ExG counter.
+ */
+static uint16_t wulpus_frame_counter = 0;
 
 /*==============================================================================
  * State flags
@@ -239,6 +259,11 @@ static void wulpus_spi_thread(void *a, void *b, void *c)
     while (1) {
         k_sem_take(&wulpus_data_rdy_sem, K_FOREVER);
 
+        /* Timestamp frame acquisition here (≈ first sample), not at BLE-forward
+         * time, so the ring-buffer queueing delay doesn't skew it. Stored for
+         * the slot being filled; the BLE thread reads it back per frame. */
+        m_frame_ts[buffer_counter] = k_cyc_to_us_floor32(k_cycle_get_32());
+
         for (int i = 0; i < WULPUS_NUMBER_OF_XFERS; i++) {
             nrfx_spim_xfer_desc_t xfer = NRFX_SPIM_XFER_TRX(
                 m_tx_buf,
@@ -283,12 +308,17 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
  * BLE forwarding thread
  *
  * Drains the ring buffer and enqueues 4 BLE NUS notifications per frame.
- * Each BLE packet is framed with a one-byte header followed by one SPI
- * transfer chunk, zero-padded to the shared BLE packet size:
- *   packet 0 : 0x10 + 201 bytes payload + 9 zero bytes = 211 bytes total
- *   packet 1 : 0x11 + 201 bytes payload + 9 zero bytes = 211 bytes total
- *   packet 2 : 0x12 + 201 bytes payload + 9 zero bytes = 211 bytes total
- *   packet 3 : 0x13 + 201 bytes payload + 9 zero bytes = 211 bytes total
+ * Each BLE packet is framed with a 7-byte header/counter/timestamp prefix
+ * (see WULPUS_META_* below), then one 201-byte SPI transfer chunk, then a
+ * 3-byte reserved tail:
+ *   packet 0 : 0x10 + 6 meta + 201 payload + 3 reserved = 211 bytes total
+ *   packet 1 : 0x11 + 6 meta + 201 payload + 3 reserved = 211 bytes total
+ *   packet 2 : 0x12 + 6 meta + 201 payload + 3 reserved = 211 bytes total
+ *   packet 3 : 0x13 + 6 meta + 201 payload + 3 reserved = 211 bytes total
+ *
+ * The per-frame counter+timestamp prefix is mirrored into all four chunks so
+ * the receiver can read it from any chunk, and matches the EEG/EMG/MIC/PPG
+ * packet layout.
  *
  * 211 bytes matches EEG_PCKT_SIZE so the biogui can use a single
  * packetSize=211 for both WULPUS and EEG/EMG on the same stream.
@@ -299,6 +329,20 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
 /** Standardized BLE packet size – must equal EEG_PCKT_SIZE (211). */
 #define WULPUS_BLE_PKT_SIZE  (WULPUS_BYTES_PER_XFER + 1U + 9U)
 
+/*
+ * Per-frame metadata written at the FRONT of every chunk, mirrored into all
+ * four chunks of a frame so the receiver can read it from any chunk. This
+ * matches the EEG/EMG/MIC/PPG packet layout (header, counter, timestamp):
+ *   [0]       chunk header (0x10..0x13)
+ *   [1:3]     frame counter (uint16 LE)
+ *   [3:7]     timestamp us  (uint32 LE)
+ *   [7:208]   201-byte SPI payload chunk
+ *   [208:211] reserved (zero)
+ */
+#define WULPUS_META_CNT_OFF  1U
+#define WULPUS_META_TS_OFF   3U
+#define WULPUS_SPI_OFF       7U
+
 static void wulpus_ble_thread(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
@@ -306,7 +350,8 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
     LOG_INF("WULPUS BLE thread started");
 
     uint8_t ble_packet[WULPUS_BLE_PKT_SIZE];
-    /* Zero once — bytes [202..210] are padding and never overwritten. */
+    /* Zero once. The header [0], metadata [1..6] and SPI payload [7..207] are
+     * rewritten per chunk/frame below; the reserved bytes [208..210] stay zero. */
     memset(ble_packet, 0, WULPUS_BLE_PKT_SIZE);
 
     while (1) {
@@ -315,25 +360,35 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
         while (current_buffer != buffer_counter) {
             int base = current_buffer * WULPUS_NUMBER_OF_XFERS;
 
-         ble_packet[0] = WULPUS_BLE_HDR_XFER_0;
-         memcpy(&ble_packet[1], m_rx_buf[base + 0].buffer,
-             WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            /* Per-frame metadata at the front of every chunk (mirrored), matching
+             * the ExG/MIC/PPG layout: counter (u16 LE) + microsecond timestamp
+             * (u32 LE). These persist across the four sends because memcpy below
+             * only rewrites the SPI payload region [7:208] and the header [0].
+             * The timestamp was captured at frame acquisition (SPI thread). */
+            uint32_t ts_us = m_frame_ts[current_buffer];
+            ble_packet[WULPUS_META_CNT_OFF]     = (uint8_t)(wulpus_frame_counter);
+            ble_packet[WULPUS_META_CNT_OFF + 1] = (uint8_t)(wulpus_frame_counter >> 8);
+            ble_packet[WULPUS_META_TS_OFF]      = (uint8_t)(ts_us);
+            ble_packet[WULPUS_META_TS_OFF + 1]  = (uint8_t)(ts_us >> 8);
+            ble_packet[WULPUS_META_TS_OFF + 2]  = (uint8_t)(ts_us >> 16);
+            ble_packet[WULPUS_META_TS_OFF + 3]  = (uint8_t)(ts_us >> 24);
+            wulpus_frame_counter++;
 
-         ble_packet[0] = WULPUS_BLE_HDR_XFER_1;
-         memcpy(&ble_packet[1], m_rx_buf[base + 1].buffer,
-             WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            ble_packet[0] = WULPUS_BLE_HDR_XFER_0;
+            memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 0].buffer, WULPUS_BYTES_PER_XFER);
+            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
-         ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
-         memcpy(&ble_packet[1], m_rx_buf[base + 2].buffer,
-             WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            ble_packet[0] = WULPUS_BLE_HDR_XFER_1;
+            memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 1].buffer, WULPUS_BYTES_PER_XFER);
+            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
-         ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
-         memcpy(&ble_packet[1], m_rx_buf[base + 3].buffer,
-             WULPUS_BYTES_PER_XFER);
-         add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
+            memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 2].buffer, WULPUS_BYTES_PER_XFER);
+            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+            ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
+            memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 3].buffer, WULPUS_BYTES_PER_XFER);
+            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
 
             buffer_content--;
             current_buffer++;
@@ -423,10 +478,26 @@ void wulpus_init(void)
 
 void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
 {
+    /* Rails are powered on demand at the first WULPUS use, not at boot:
+     * the VD0 5 V boost must not run during EEG/EMG-only sessions
+     * (switching noise; on battery it can desense the BLE radio). */
+    static bool wulpus_rails_on = false;
+
+    if (!wulpus_rails_on) {
+        LOG_INF("Powering WULPUS rails (VA0/VD0/VD2)");
+        if (wulpus_power_on() != 0) {
+            LOG_ERR("WULPUS rail power-on failed - config not sent");
+            return;
+        }
+        wulpus_rails_on = true;
+        k_msleep(WULPUS_POWERUP_DELAY_MS);
+    }
+
     if (config != NULL && len > 0) {
         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
         if (config[0] == 250 || config[0] == 251) {
             m_tx_write_pos = 0;
+            wulpus_frame_counter = 0;   /* new streaming session: reset counter */
         }
         uint16_t copy_len = MIN(len, (uint16_t)(WULPUS_BYTES_PER_XFER - m_tx_write_pos));
         memcpy(m_tx_buf + m_tx_write_pos, config, copy_len);

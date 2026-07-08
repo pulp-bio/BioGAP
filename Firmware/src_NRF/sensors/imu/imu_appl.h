@@ -70,9 +70,10 @@
 /**
  * @brief Total IMU BLE packet size in bytes
  *
- * Packet structure (127 bytes total):
+ * Packet structure (128 bytes total). The header/counter/timestamp prefix is
+ * harmonized with the ExG/MIC/PPG packets:
  * - 1 byte: Header (0x56)
- * - 1 byte: Packet counter
+ * - 2 bytes: Packet counter (uint16, little-endian)
  * - 4 bytes: Timestamp (microseconds, for cross-packet synchronization)
  * - 120 bytes: 20 samples x 6 bytes per sample
  *   - 2 bytes: Acceleration X (int16_t, big-endian)
@@ -80,7 +81,7 @@
  *   - 2 bytes: Acceleration Z (int16_t, big-endian)
  * - 1 byte: Trailer (0x57)
  */
-#define IMU_PCKT_SIZE (1 + 1 + 4 + (IMU_SAMPLES_PER_PACKET * IMU_BYTES_PER_SAMPLE) + 1)
+#define IMU_PCKT_SIZE (1 + 2 + 4 + (IMU_SAMPLES_PER_PACKET * IMU_BYTES_PER_SAMPLE) + 1)
 
 /** @brief Timeout in ms for reading IMU data */
 #define IMU_READ_TIMEOUT 100

@@ -55,14 +55,24 @@ int battery_init(void) {
 }
 
 int battery_update_status(void) {
-    // Get battery percentage and battery voltage
+    // Get battery percentage and battery voltage (cached by the pwr thread)
     current_soc = pwr_bat_perc();
     current_bat_mv = pwr_bat_mV();
+
+    /* Serialize direct PMIC access (status + AMUX measurements) against
+     * rail switching and the SDK pwr thread. Without this, a measurement
+     * interleaving with a rail config can make the config's I2C
+     * transaction fail silently. Skip this cycle if the bus is busy. */
+    if (k_mutex_lock(&pwr_mutex, K_MSEC(200)) != 0) {
+        LOG_WRN("PMIC busy - skipping battery status update");
+        return -EBUSY;
+    }
 
     // Retrieve PMIC status
     struct max77654_stat stat;
     if (max77654_get_stat(&pmic_h, &stat) != E_MAX77654_SUCCESS) {
         LOG_ERR("Failed to get PMIC status");
+        k_mutex_unlock(&pwr_mutex);
         return -1;
     }
 
@@ -90,6 +100,7 @@ int battery_update_status(void) {
         current_power_mw = (vsys_v * batt_i) / 1000;
     }
 
+    k_mutex_unlock(&pwr_mutex);
     return 0;
 }
 

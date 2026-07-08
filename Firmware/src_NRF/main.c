@@ -53,6 +53,7 @@
 #include "sensors/imu/imu_appl.h"
 #include "sensors/mic/mic_appl.h"
 #include "sensors/eeg/eeg_appl.h"
+#include "sensors/emg/emg_appl.h"
 #if defined(CONFIG_SENSOR_PPG_NEW)
 #include "sensors/ppg_new/ppg_new_appl.h"
 #endif
@@ -141,7 +142,10 @@ int main(void) {
     LOG_INF("IMU initialized");
   }
 
-#if defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
+/* EEG and EMG can both be built into one image; the mode (unipolar vs
+ * bipolar rails) is selected at runtime by the GUI start command, and
+ * simultaneous streaming is rejected in eeg/emg_start_streaming(). */
+#if defined(CONFIG_SENSOR_EEG)
   // Initialize EEG subsystem
   LOG_INF("Initializing EEG subsystem...");
   if (eeg_init() != 0) {
@@ -151,7 +155,7 @@ int main(void) {
   }
 #endif
 
-#if defined(CONFIG_SENSOR_EMG) && !defined(CONFIG_SENSOR_EEG)
+#if defined(CONFIG_SENSOR_EMG)
   // Initialize EMG subsystem
   LOG_INF("Initializing EMG subsystem...");
   if (emg_init() != 0) {
@@ -172,10 +176,12 @@ int main(void) {
 #endif
 
 #if defined(CONFIG_SENSOR_WULPUS)
-  // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge)
+  // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
+  // Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
+  // incl. the 5 V boost) are powered on demand when the first WULPUS config
+  // arrives via BLE (see wulpus_set_msp_config), so they stay off during
+  // EEG/EMG-only sessions.
   LOG_INF("Initializing WULPUS...");
-  k_msleep(5000); // Main thread can sleep now, all the work is handeled by other threads
-  wulpus_power_on();
   wulpus_init();
   LOG_INF("WULPUS initialized");
 #endif

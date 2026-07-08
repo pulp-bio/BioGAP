@@ -75,8 +75,8 @@ static uint8_t imu_tx_buf[IMU_PCKT_SIZE];
 /** @brief Current index in IMU packet buffer */
 static uint8_t imu_buf_idx = 0;
 
-/** @brief IMU packet counter (wraps at 256) */
-static uint8_t imu_pkt_counter = 0;
+/** @brief IMU packet counter (uint16, wraps at 65536) */
+static uint16_t imu_pkt_counter = 0;
 
 /** @brief Timestamp of first sample in current packet */
 static uint32_t imu_packet_timestamp = 0;
@@ -100,7 +100,10 @@ static bool imu_initialized = false;
 static void imu_packet_init(void) {
   imu_buf_idx = 0;
   imu_tx_buf[imu_buf_idx++] = IMU_DATA_HEADER;
-  imu_tx_buf[imu_buf_idx++] = imu_pkt_counter++;
+  /* Packet counter (uint16, little-endian) — harmonized with ExG/MIC/PPG */
+  imu_tx_buf[imu_buf_idx++] = (uint8_t)(imu_pkt_counter);
+  imu_tx_buf[imu_buf_idx++] = (uint8_t)(imu_pkt_counter >> 8);
+  imu_pkt_counter++;
   /* Reserve 4 bytes for timestamp (filled when first sample arrives) */
   imu_buf_idx += 4;
   imu_sample_count = 0;
@@ -121,10 +124,10 @@ static void imu_packet_add_sample(int16_t x, int16_t y, int16_t z) {
   if (imu_sample_count == 0) {
     imu_packet_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
     /* Fill in timestamp bytes (little-endian) */
-    imu_tx_buf[2] = (uint8_t)(imu_packet_timestamp & 0xFF);
-    imu_tx_buf[3] = (uint8_t)((imu_packet_timestamp >> 8) & 0xFF);
-    imu_tx_buf[4] = (uint8_t)((imu_packet_timestamp >> 16) & 0xFF);
-    imu_tx_buf[5] = (uint8_t)((imu_packet_timestamp >> 24) & 0xFF);
+    imu_tx_buf[3] = (uint8_t)(imu_packet_timestamp & 0xFF);
+    imu_tx_buf[4] = (uint8_t)((imu_packet_timestamp >> 8) & 0xFF);
+    imu_tx_buf[5] = (uint8_t)((imu_packet_timestamp >> 16) & 0xFF);
+    imu_tx_buf[6] = (uint8_t)((imu_packet_timestamp >> 24) & 0xFF);
   }
 
   /* Add X, Y, Z accelerometer data (big-endian) */

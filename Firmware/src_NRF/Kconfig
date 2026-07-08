@@ -50,27 +50,34 @@ config SENSOR_EMG
 	bool "EMG sensor"
 	default n
 	help
-	  Enable support for EMG sensor. This will include the necessary drivers,
-	  state machine states, and data processing for EMG data acquisition.
+	  Enable support for EMG sensor (ADS1298 in bipolar supply mode:
+	  VA1=1.5V + VD1=2.7V). Can be enabled together with SENSOR_EEG in one
+	  image: the mode is selected at runtime by the GUI start command
+	  (START_EMG_STREAMING), and simultaneous EEG+EMG streaming is
+	  rejected at runtime (shared ADS1298 pair and VA1 rail).
 
 config SENSOR_EEG
 	bool "EEG sensor"
 	default n
 	help
-	  Enable support for EEG sensor. This will include the necessary drivers,
-	  state machine states, and data processing for EEG data acquisition.
+	  Enable support for EEG sensor (ADS1298 in unipolar supply mode:
+	  VA1=3.0V). Can be enabled together with SENSOR_EMG in one image:
+	  the mode is selected at runtime by the GUI start command
+	  (START_EEG_STREAMING), and simultaneous EEG+EMG streaming is
+	  rejected at runtime (shared ADS1298 pair and VA1 rail).
 
 config SENSOR_WULPUS
 	bool "WULPUS ultrasound probe (MSP430 via SPI_B)"
 	default n
-	select NRFX_SPIM3
+	select NRFX_SPIM2
 	help
 	  Enables the WULPUS ultrasound probe interface. The nRF5340 acts as a
 	  BLE bridge between the MSP430 ultrasound controller and the WULPUS
 	  receiver dongle, 100% backwards-compatible with the nRF52
 	  WULPUS_PROBE_3 firmware.
 
-	  SPI_B pin assignment (BioGAP):
+	  SPI_B pin assignment (BioGAP, driven by SPIM2; serial-box 3 is kept
+	  free so UART3 remains available for the GAP9 UART):
 	    SCK=P1.07  MOSI=P0.30  MISO=P0.29  CS=P1.08
 	  Control GPIOs:
 	    HOST_DATA_RDY=P1.13 (input, MSP430 → nRF5340)

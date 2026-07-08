@@ -146,10 +146,22 @@ static void le_data_length_updated(struct bt_conn *conn, struct bt_conn_le_data_
 static void init_test_data(void);
 
 static void bt_receive_cb(struct bt_conn *conn, const uint8_t *const data, uint16_t len) {
-  memcpy(ble_data_available.data, data, len);
-  ble_data_available.available = true;
-  ble_data_available.size = len;
-  k_sem_give(&ble_data_received);
+  /* Single producer (one BLE connection), so a static scratch buffer is safe.
+   * k_msgq_put copies the message into the queue. */
+  static ble_nus_data_t rx_msg;
+
+  if (len > sizeof(rx_msg.data)) {
+    LOG_WRN("NUS RX message truncated (%u > %u bytes)", len, (unsigned)sizeof(rx_msg.data));
+    len = sizeof(rx_msg.data);
+  }
+
+  memcpy(rx_msg.data, data, len);
+  rx_msg.available = true;
+  rx_msg.size = len;
+
+  if (k_msgq_put(&nus_rx_msgq, &rx_msg, K_NO_WAIT) != 0) {
+    LOG_ERR("NUS RX queue full - command dropped (%u bytes, first byte %u)", len, data[0]);
+  }
 }
 
 static struct bt_nus_cb nus_cb = {

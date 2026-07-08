@@ -36,6 +36,11 @@
 #define SEND_QUEUE_SIZE 64    // Number of BLE packets that can be queued for sending
 #define RECEIVE_QUEUE_SIZE 16 // Number of BLE packets that can be queued for receiving
 
+/** @brief Depth of the incoming NUS command queue. Must cover all messages
+ *  the GUI can send while a previous command blocks the receive thread
+ *  (e.g. the multi-fragment WULPUS config during the first rail power-up). */
+#define NUS_RX_QUEUE_SIZE 8
+
 #define BLE_PCKT_MAX_SIZE 244     // Maximum BLE packet size (must fit within MTU)
 #define BLE_PCKT_RECEIVE_SIZE 234 // Size of each received packet in bytes
 
@@ -75,7 +80,7 @@ typedef struct {
 } uart_to_pulp_data_t;
 
 extern ble_nus_data_t ble_data_available;
-extern struct k_sem ble_data_received;
+extern struct k_msgq nus_rx_msgq;
 
 // Function prototypes
 void init_ble_comm(void);

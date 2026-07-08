@@ -65,7 +65,59 @@ void soft_rst_irq_callback(const struct device *dev, struct gpio_callback *cb, u
   flag_isr_soft_reset = 1;
 }
 
+/* Mutex-guarded, verified single-rail PMIC config with one retry.
+ * The SDK serializes its own PMIC access (thread_pwr) with pwr_mutex;
+ * app-side rail switching must do the same, otherwise a concurrent
+ * battery measurement can interleave with the config transaction and
+ * the write fails silently (observed: VA0 enable not applied). */
+static int pwr_rail_apply(bool is_sbb, uint8_t idx, const char *name) {
+  max77654_err_t err = E_MAX77654_ERR;
+  bool locked = (k_mutex_lock(&pwr_mutex, K_MSEC(500)) == 0);
+
+  if (!locked) {
+    LOG_WRN("PMIC mutex timeout for %s - proceeding unlocked", name);
+  }
+
+  for (int attempt = 0; attempt < 2; attempt++) {
+    err = is_sbb ? max77654_config_sbb(&pmic_h, (max77654_sbb_t)idx)
+                 : max77654_config_ldo(&pmic_h, (max77654_ldo_t)idx);
+    if (err == E_MAX77654_SUCCESS) {
+      if (attempt > 0) {
+        LOG_WRN("PMIC %s config succeeded on retry", name);
+      }
+      break;
+    }
+    LOG_WRN("PMIC %s config failed (err 0x%x)%s", name, err,
+            attempt == 0 ? " - retrying" : "");
+    k_msleep(10);
+  }
+
+  if (locked) {
+    k_mutex_unlock(&pwr_mutex);
+  }
+
+  if (err != E_MAX77654_SUCCESS) {
+    LOG_ERR("PMIC %s config failed after retry", name);
+    return -EIO;
+  }
+  return 0;
+}
+
+int pwr_rail_config_sbb(max77654_sbb_t sbb, const char *name) {
+  return pwr_rail_apply(true, (uint8_t)sbb, name);
+}
+
+int pwr_rail_config_ldo(max77654_ldo_t ldo, const char *name) {
+  return pwr_rail_apply(false, (uint8_t)ldo, name);
+}
+
 int pwr_bsp_init() {
+  /* Slow down the SIMO switching edges (default is FASTEST). The SBB
+   * converters share one inductor; with fast edges + high peak current the
+   * 5 V boost (VD0) running from battery desenses the BLE radio RX.
+   * Applied by max77654_init() right after this function returns. */
+  pmic_h.conf.sbb_drive_speed = MAX77654_SBB_DRIVE_SLOWEST;
+
   // Configure soft reset button
   if (!device_is_ready(soft_rst_int_gpio.port)) {
       LOG_ERR("Soft reset GPIO port not ready");
@@ -124,39 +176,45 @@ int pwr_charge_enable()
 
 
 int wulpus_power_on(void) {
-    // Currently, there are no specific power configurations needed for the WULPUS shield
-    // This function is a placeholder for any future power management related to the shield
     LOG_INF("WULPUS shield power on");
     struct max77654_conf *pmic_conf = &pmic_h.conf;
+    int err = 0;
 
-    // VA0 set to 3.3V
+    // VD2 set to 3.3V (digital supply, light load - low peak current)
+    pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[2].active_discharge = false;
+    pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
+
+    err |= pwr_rail_config_sbb(MAX77654_SBB2, "VD2 3.3V");
+    k_msleep(10);
+
+    // VD0 set to 5V - must come up BEFORE VA0: the LDO0 input (VA0) is
+    // supplied from the VD0 net, so the LDO output can only rise once the
+    // 5V boost is up (observed on scope: VA0 followed VD0, not its own
+    // enable). Peak current reduced from 1A: smaller inductor current
+    // bursts mean less battery/VSYS ripple and less radio desense on
+    // battery power. If VD0 sags during ultrasound TX bursts, step up to 0A75.
+    pmic_conf->sbb_conf[0].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[0].active_discharge = false;
+    pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[0].output_voltage_mV = 5000;
+
+    err |= pwr_rail_config_sbb(MAX77654_SBB0, "VD0 5V");
+    k_msleep(10);
+
+    // VA0 set to 3.3V (LDO0, post-regulated from VD0)
     pmic_conf->ldo_conf[0].mode = MAX77654_LDO_MODE_LDO;
     pmic_conf->ldo_conf[0].active_discharge = false;
     pmic_conf->ldo_conf[0].en = MAX77654_REG_ON;
     pmic_conf->ldo_conf[0].output_voltage_mV = 3300;
 
-    max77654_config(&pmic_h);
-    k_msleep(100);
+    err |= pwr_rail_config_ldo(MAX77654_LDO0, "VA0 3.3V");
+    k_msleep(10);
 
-    // VD0 set to 5V
-    pmic_conf->sbb_conf[0].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
-    pmic_conf->sbb_conf[0].active_discharge = false;
-    pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
-    pmic_conf->sbb_conf[0].output_voltage_mV = 5000;
-
-    max77654_config(&pmic_h);
-    k_msleep(100);
-
-    // VD2 set to 3.3V
-    pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
-    pmic_conf->sbb_conf[2].active_discharge = false;
-    pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
-    pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
-
-    max77654_config(&pmic_h);
-    return 0;
+    return err ? -EIO : 0;
 }
 
 int pwr_bsp_start() {

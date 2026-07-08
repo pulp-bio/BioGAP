@@ -30,8 +30,8 @@
  * @file ads_spi_data.c
  * @brief ADS1298 Data Processing and BLE Packet Construction
  *
- * This module handles data acquisition from ADS1298 devices, combines data
- * with PPG sensor readings, and constructs BLE packets for transmission.
+ * This module handles data acquisition from ADS1298 devices and constructs
+ * BLE packets for transmission.
  */
 
 /* Zephyr RTOS headers */
@@ -43,7 +43,6 @@
 #include "afe/ads_defs.h"
 #include "afe/ads_spi_data.h"
 #include "ble/ble_appl.h"
-#include "sensors/ppg/ppg_appl.h"
 #include "ads_spi_comm.h"
 
 /* Inter-board synchronization */
@@ -54,13 +53,6 @@ LOG_MODULE_REGISTER(ads_spi_data, LOG_LEVEL_INF);
 /*==============================================================================
  * External Variables
  *============================================================================*/
-
-/**
- * @brief PPG sensor data structure
- *
- * Defined in ppg_appl.c. Contains circular buffer of red and IR LED readings.
- */
-extern sense_struct sense;
 
 /**
  * @brief SPI receive buffer for ADS1298 data
@@ -105,6 +97,14 @@ uint16_t counter = 0;
  * scripts for timing analysis.
  */
 uint8_t counter_extra = 0;
+
+/**
+ * @brief Timestamp (µs) of the first sample in the current packet
+ *
+ * Captured when the first sample of a packet arrives (first DRDY) so the
+ * packet timestamp references the first sample: sample_i ≈ ts + i / fs.
+ */
+static uint32_t exg_packet_timestamp = 0;
 
 /*==============================================================================
  * Module Variables - State Flags
@@ -162,31 +162,14 @@ volatile bool ads_to_read = ADS1298_A;
  */
 void ads_spim_handler_done(void) {
   if (ads_get_function() == ADS_READ) {
+    /* Timestamp the first sample of each packet (harmonized first-sample
+     * convention): when tx_buf_inx sits at the start of the sample region,
+     * a fresh packet is beginning. */
+    if (tx_buf_inx == EXG_SAMPLE_DATA_START) {
+      exg_packet_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
+    }
     memcpy(&ble_tx_buf[tx_buf_inx], &ads_rx_buf[3], 24);
     tx_buf_inx += 24;
-
-    if (Get_PPG_Function() == PPG_ACTIVE) {
-      // Replace last two EEG channels with PPG data (IR and red LED)
-      tx_buf_inx -= 6;
-
-      // Get the pointers to the start of the most recent PPG data
-      uint8_t *address_red = (uint8_t *)&sense.red[sense.head];
-      uint8_t *address_IR = (uint8_t *)&sense.IR[sense.head];
-      // Add the PPG data such that the Biowolf GUI interprets it correctly
-      memcpy(&ble_tx_buf[tx_buf_inx], address_red + 2, 1);
-      tx_buf_inx++;
-      memcpy(&ble_tx_buf[tx_buf_inx], address_red + 1, 1);
-      tx_buf_inx++;
-      memcpy(&ble_tx_buf[tx_buf_inx], address_red + 0, 1);
-      tx_buf_inx++;
-
-      memcpy(&ble_tx_buf[tx_buf_inx], address_IR + 2, 1);
-      tx_buf_inx++;
-      memcpy(&ble_tx_buf[tx_buf_inx], address_IR + 1, 1);
-      tx_buf_inx++;
-      memcpy(&ble_tx_buf[tx_buf_inx], address_IR + 0, 1);
-      tx_buf_inx++;
-    }
 
     if (ads_to_read == ADS1298_B) {
       //  Set packet identifier to EEG all channels + PPG inactive
@@ -212,8 +195,8 @@ void ads_spim_handler_done(void) {
         ble_tx_buf[tx_buf_inx++] = (uint8_t)(counter);
         ble_tx_buf[tx_buf_inx++] = (uint8_t)(counter >> 8);
 
-        // Add timestamp (microseconds) for cross-packet synchronization
-        uint32_t timestamp_us = k_cyc_to_us_floor32(k_cycle_get_32());
+        // Add timestamp (microseconds) captured at the first sample of this packet
+        uint32_t timestamp_us = exg_packet_timestamp;
         ble_tx_buf[tx_buf_inx++] = (uint8_t)(timestamp_us & 0xFF);
         ble_tx_buf[tx_buf_inx++] = (uint8_t)((timestamp_us >> 8) & 0xFF);
         ble_tx_buf[tx_buf_inx++] = (uint8_t)((timestamp_us >> 16) & 0xFF);

@@ -17,6 +17,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 
+#include "bsp/pwr_bsp.h"
 #include "pwr/pwr_common.h"
 #include "max77654.h"
 
@@ -56,9 +57,16 @@ int power_ads_off(void) {
     pmic_conf->ldo_conf[1].en = MAX77654_REG_OFF;
     pmic_conf->ldo_conf[1].output_voltage_mV = 0;
 
-    max77654_config(&pmic_h);
+    // Switch off VD1 (only on after bipolar operation; no-op otherwise)
+    pmic_conf->sbb_conf[1].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[1].active_discharge = true;
+    pmic_conf->sbb_conf[1].en = MAX77654_REG_OFF;
 
-    return 0;
+    int err = 0;
+    err |= pwr_rail_config_ldo(MAX77654_LDO1, "VA1 (off)");
+    err |= pwr_rail_config_sbb(MAX77654_SBB1, "VD1 (off)");
+    return err ? -EIO : 0;
 }
 
 int power_ads_on_unipolar(void) {
@@ -76,9 +84,7 @@ int power_ads_on_unipolar(void) {
     pmic_conf->ldo_conf[1].en = MAX77654_REG_ON;
     pmic_conf->ldo_conf[1].output_voltage_mV = 3000;
 
-    max77654_config(&pmic_h);
-
-    return 0;
+    return pwr_rail_config_ldo(MAX77654_LDO1, "VA1 3.0V");
 }
 
 int power_ads_on_bipolar(void) {
@@ -97,12 +103,17 @@ int power_ads_on_bipolar(void) {
     pmic_conf->ldo_conf[1].output_voltage_mV = 1500;
 
     pmic_conf->sbb_conf[1].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
     pmic_conf->sbb_conf[1].active_discharge = true;
     pmic_conf->sbb_conf[1].en = MAX77654_REG_OFF;
     pmic_conf->sbb_conf[1].output_voltage_mV = 1800;
 
-    max77654_config(&pmic_h);
+    int err = 0;
+    err |= pwr_rail_config_ldo(MAX77654_LDO1, "VA1 (pre-off)");
+    err |= pwr_rail_config_sbb(MAX77654_SBB1, "VD1 (pre-off)");
+    if (err) {
+        return -EIO;
+    }
 
     // Then enable VA1 and SBB1 for bipolar operation
     pmic_conf->ldo_conf[1].mode = MAX77654_LDO_MODE_LDO;
@@ -110,26 +121,29 @@ int power_ads_on_bipolar(void) {
     pmic_conf->ldo_conf[1].en = MAX77654_REG_ON;
     pmic_conf->ldo_conf[1].output_voltage_mV = 1500;
 
+    /* Low peak current: the ADS1298 2.7V rail draws only a few mA, and
+     * smaller inductor bursts mean less supply ripple on battery. */
     pmic_conf->sbb_conf[1].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
     pmic_conf->sbb_conf[1].active_discharge = false;
     pmic_conf->sbb_conf[1].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[1].output_voltage_mV = 2700;
 
-    max77654_config(&pmic_h);
-
-    return 0;
+    err |= pwr_rail_config_ldo(MAX77654_LDO1, "VA1 1.5V");
+    err |= pwr_rail_config_sbb(MAX77654_SBB1, "VD1 2.7V");
+    return err ? -EIO : 0;
 }
 
-int power_exg_on(void) {
-#if defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
-    LOG_INF("EEG sensor - powering on unipolar configuration");
-    return power_ads_on_unipolar();
-#elif defined(CONFIG_SENSOR_EMG) && !defined(CONFIG_SENSOR_EEG)
-    LOG_INF("EMG sensor - powering on bipolar configuration");
-    return power_ads_on_bipolar();
-#else
-    LOG_ERR("No EXG sensor enabled");
-    return -EINVAL;
-#endif
+int power_exg_on(exg_mode_t mode) {
+    switch (mode) {
+    case EXG_MODE_UNIPOLAR:
+        LOG_INF("Powering ADS rails for unipolar (EEG) operation");
+        return power_ads_on_unipolar();
+    case EXG_MODE_BIPOLAR:
+        LOG_INF("Powering ADS rails for bipolar (EMG) operation");
+        return power_ads_on_bipolar();
+    default:
+        LOG_ERR("Unknown EXG mode %d", mode);
+        return -EINVAL;
+    }
 }

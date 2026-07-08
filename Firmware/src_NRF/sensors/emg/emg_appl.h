@@ -48,13 +48,15 @@
  * Configuration
  *============================================================================*/
 
-/** @brief EMG sample rate in Hz (ADS1298 ODR setting) */
-#define EMG_SAMPLE_RATE 250
+/** @brief EMG sample rate in Hz (ADS1298 ODR setting)
+ *  ADS1298 runs in High-Resolution mode (CONFIG1 = 0xC0 | data-rate code 6),
+ *  so DR = 110 -> 500 SPS. */
+#define EMG_SAMPLE_RATE 500
 
 /**
  * @brief Number of EMG samples per BLE packet
  *
- * At 250 Hz ODR, 4 samples = 16ms of data, resulting in ~62.5 packets/second.
+ * At 500 Hz ODR, 4 samples = 8ms of data, resulting in ~125 packets/second.
  */
 #define EMG_SAMPLES_PER_PACKET 4
 

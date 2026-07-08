@@ -32,11 +32,30 @@
 #include <stdbool.h> // Defines bool
 #include <stdint.h>  // Defines uint32_t, uint8_t, etc.
 
+#include "max77654.h"
+
 /**
  * @brief Initialise all the pwr hardware interface.
  * @return negative on error, 0 otherwise
  */
 int pwr_bsp_init();
+
+/**
+ * @brief Apply the current pmic_h.conf settings of one SBB rail to the PMIC.
+ *
+ * Serialized against the other PMIC users via pwr_mutex, verifies the
+ * driver return code and retries once. Use these instead of a bare
+ * max77654_config() for rail switching: a silently failed I2C transaction
+ * otherwise leaves the rail in the wrong state.
+ *
+ * @param sbb  SBB rail (MAX77654_SBB0/1/2)
+ * @param name Rail name for log messages (e.g. "VD0 5V")
+ * @return 0 on success, -EIO if the config failed after retry
+ */
+int pwr_rail_config_sbb(max77654_sbb_t sbb, const char *name);
+
+/** @brief LDO variant of pwr_rail_config_sbb(). */
+int pwr_rail_config_ldo(max77654_ldo_t ldo, const char *name);
 
 /**
  * @brief Configure all the pwr switches.

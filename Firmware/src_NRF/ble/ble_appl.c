@@ -34,6 +34,7 @@
 #include "core/sync_streaming.h"
 #include "sensors/ppg_new/ppg_new_appl.h"
 #include "sensors/eeg/eeg_appl.h"
+#include "sensors/emg/emg_appl.h"
 #include "sensors/imu/imu_appl.h"
 #include "sensors/imu/lis2duxs12_sensor.h"
 #include "sensors/mic/mic_appl.h"
@@ -53,6 +54,15 @@ LOG_MODULE_REGISTER(ble_appl, LOG_LEVEL_INF);
 K_MSGQ_DEFINE(send_msgq, sizeof(ble_packet_t), SEND_QUEUE_SIZE, 4);
 K_MSGQ_DEFINE(receive_msgq, BLE_PCKT_RECEIVE_SIZE, RECEIVE_QUEUE_SIZE, 1);
 
+/* Incoming NUS command queue. Depth > 1 is essential: command handling can
+ * block the receive thread for a long time (EEG rail settle ~300 ms, first
+ * WULPUS rail power-up ~900 ms) while the GUI keeps sending - notably the
+ * multi-fragment WULPUS MSP430 config. With the previous one-slot buffer,
+ * every fragment arriving during such a window overwrote the previous one
+ * and the MSP430 config assembly stayed incomplete (first start failed,
+ * second start worked because the rails were already on). */
+K_MSGQ_DEFINE(nus_rx_msgq, sizeof(ble_nus_data_t), NUS_RX_QUEUE_SIZE, 4);
+
 /* Define stack sizes and priorities */
 #define BLE_SEND_STACK_SIZE 2048
 #define BLE_SEND_PRIORITY 5
@@ -63,9 +73,6 @@ K_MSGQ_DEFINE(receive_msgq, BLE_PCKT_RECEIVE_SIZE, RECEIVE_QUEUE_SIZE, 1);
 ble_nus_data_t ble_data_available;
 
 uart_to_pulp_data_t pck_uart_wolf;
-
-
-K_SEM_DEFINE(ble_data_received, 0, 1);
 
 /**
  * @brief BLE Send Thread
@@ -383,12 +390,9 @@ void process_received_data_thread(void *arg1, void *arg2, void *arg3) {
   LOG_INF("BLE receive thread started");
 
   while (1) {
-    k_sem_take(&ble_data_received, K_FOREVER);
-
-    if (!ble_data_available.available)
-      continue;
-
-    ble_data_available.available = false;
+    /* Blocks until the next NUS message; the queue preserves every message
+     * even while a previous command keeps this thread busy. */
+    k_msgq_get(&nus_rx_msgq, &ble_data_available, K_FOREVER);
     LOG_INF("Received data from BLE");
 
     // Skip processing in programming mode

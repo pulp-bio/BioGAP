@@ -40,7 +40,6 @@
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/drivers/spi.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -87,12 +86,6 @@ static const struct gpio_dt_spec gpio_dt_ads1298_a_dr = GPIO_DT_SPEC_GET(ADS_A_D
 
 /** @brief SPI interrupt priority level */
 #define SPI_INT_PRIO 1
-
-/** @brief SPI operation flags: 8-bit words, MSB first */
-#define SPIOP SPI_WORD_SET(8) | SPI_TRANSFER_MSB
-
-/** @brief SPI device tree spec for ADS1298_A */
-struct spi_dt_spec spispec = SPI_DT_SPEC_GET(DT_NODELABEL(ads1298_a), SPIOP, 0);
 
 /*==============================================================================
  * Module Variables - Synchronization

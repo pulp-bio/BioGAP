@@ -51,6 +51,9 @@
 #include "bsp/pwr_bsp.h"
 #include "bsp/power/power.h"
 
+// EMG state, for runtime mutual exclusion (shared ADS1298 pair + VA1 rail)
+#include "sensors/emg/emg_appl.h"
+
 // Include sync streaming for synchronized start/stop
 #include "core/sync_streaming.h"
 
@@ -123,17 +126,22 @@ int eeg_init(void) {
 }
 
 int eeg_start_streaming(void) {
-  #if defined(CONFIG_SENSOR_EMG)
-    LOG_ERR("EMG sensor enabled - cannot start EEG streaming");
-    return -EINVAL;
-  #endif
+  if (!IS_ENABLED(CONFIG_SENSOR_EEG)) {
+    LOG_ERR("EEG support not enabled in this build (CONFIG_SENSOR_EEG)");
+    return -ENOTSUP;
+  }
 
-  #if !defined(CONFIG_SENSOR_EEG) && !defined(CONFIG_SENSOR_EMG)
-    LOG_ERR("No sensor enabled - enable either EEG or EMG in Kconfig");
-    return -EINVAL;
-   #endif
+  /* EEG and EMG share the ADS1298 pair and the VA1 rail (at different
+   * voltages), so they are mutually exclusive at runtime. ERROR state
+   * does not block: an errored subsystem is not using the rails. */
+  if (emg_get_state() != EMG_STATE_IDLE && emg_get_state() != EMG_STATE_ERROR) {
+    LOG_ERR("EMG is active (state %d) - stop EMG before starting EEG", emg_get_state());
+    return -EBUSY;
+  }
 
-  if (eeg_state != EEG_STATE_IDLE) {
+  /* Allow restart from ERROR: the start path re-runs power-on and the
+   * full ADS init, so a failed attempt does not require a reboot. */
+  if (eeg_state != EEG_STATE_IDLE && eeg_state != EEG_STATE_ERROR) {
     LOG_ERR("EEG not in idle state, current state: %d", eeg_state);
     return -EBUSY;
   }
@@ -145,7 +153,7 @@ int eeg_start_streaming(void) {
   eeg_buf_idx = 0;
   eeg_pkt_counter = 0;
 
-  if (power_exg_on() != 0) {
+  if (power_exg_on(EXG_MODE_UNIPOLAR) != 0) {
     LOG_ERR("Power on failed - cannot start EEG streaming");
     eeg_state = EEG_STATE_ERROR;
     return -EINVAL;
@@ -153,10 +161,16 @@ int eeg_start_streaming(void) {
   k_msleep(300);
 
   if (first_run) {
-    first_run = false;
     LOG_INF("Checking ADS1298 device IDs");
-    ads_check_id(ADS1298_A);
-    ads_check_id(ADS1298_B);
+    if (ads_check_id(ADS1298_A) != 0 || ads_check_id(ADS1298_B) != 0) {
+      LOG_ERR("ADS1298 ID check failed - powering rails off, EEG start aborted "
+              "(check battery voltage / shield)");
+      power_ads_off();
+      eeg_state = EEG_STATE_ERROR;
+      return -EIO;
+    }
+    /* Only skip the check on later starts once it has succeeded once. */
+    first_run = false;
   }
 
   LOG_INF("Initializing ADS1298 devices with provided parameters");

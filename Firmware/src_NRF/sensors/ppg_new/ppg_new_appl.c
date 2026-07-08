@@ -101,7 +101,8 @@ const struct gpio_dt_spec ppg_sync_gpio =
 static const struct gpio_dt_spec ppg_intb_gpio =
     GPIO_DT_SPEC_GET(DT_NODELABEL(ppg_intb), gpios);
 
-/* Debug toggle output: P0.29 – toggles every PPG_DEBUG_TOGGLE_PKTS packets. */
+/* Debug toggle output: P0.25 – toggles every PPG_DEBUG_TOGGLE_PKTS packets.
+ * NOTE: P0.25 is also button0 / mcuboot-button0 on the mainboard. */
 static const struct gpio_dt_spec ppg_debug_gpio =
     GPIO_DT_SPEC_GET(DT_NODELABEL(ppg_debug), gpios);
 
@@ -151,6 +152,11 @@ static uint8_t ppg_tx_buf[PPG_BLE_PKT_SIZE];
  */
 static maxm86161_ppg_sample_t ppg_ch_samples[I2C_MUX_MAX_CHANNELS][PPG_SAMPLES_PER_PKT];
 static uint8_t                ppg_ch_n_samples[I2C_MUX_MAX_CHANNELS];
+
+/** Timestamp (µs) captured when a sample batch becomes ready (INTB fires),
+ *  before the I2C read-out. Back-dated to the first sample when the packet
+ *  is built. */
+static uint32_t               ppg_batch_timestamp = 0;
 
 /*
  * Shared FIFO queue – cleared and re-used for each channel read in turn.
@@ -270,7 +276,10 @@ static void ppg_send_combined_packet(void)
                      | ((cfg->led_ir    != 0) ? 0x02U : 0U)
                      | ((cfg->led_red   != 0) ? 0x04U : 0U);
 
-    uint32_t ts = k_cyc_to_us_floor32(k_cycle_get_32());
+    /* Reference the FIRST sample of the batch (harmonized convention): the INTB
+     * fired at ~the last sample, so back-date by (N-1)/fs. */
+    uint32_t fs_hz = (cfg->sample_rate_hz > 0U) ? cfg->sample_rate_hz : 1U;
+    uint32_t ts = ppg_batch_timestamp - (PPG_SAMPLES_PER_PKT - 1U) * 1000000U / fs_hz;
 
     uint16_t idx = 0;
     ppg_tx_buf[idx++] = PPG_DATA_HEADER;
@@ -587,6 +596,9 @@ static void ppg_streaming_thread(void *arg1, void *arg2, void *arg3)
                 continue;
             }
 
+            /* Batch ready — timestamp it now, before the I2C read-out latency. */
+            ppg_batch_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
+
             /* Read PPG_SAMPLES_PER_PKT samples from every active channel. */
             for (uint8_t ch = 0; ch < I2C_MUX_MAX_CHANNELS; ch++) {
                 if (!(rcfg->sensor_mask & (1U << ch))) {
@@ -688,7 +700,7 @@ int ppg_new_init(void)
     LOG_INF("PPG ch%u: PART_ID=0x%02X REV_ID=0x%02X", 0, part, rev);
     i2c_mux_deselect_all();
 
-    /* Configure GPIO sync output pin (P0.13, active-low). */
+    /* Configure GPIO sync output pin (P0.31, active-low). */
     if (!gpio_is_ready_dt(&ppg_sync_gpio)) {
         LOG_ERR("PPG sync GPIO not ready");
         return -ENODEV;
@@ -719,7 +731,7 @@ int ppg_new_init(void)
         return ret;
     }
 
-    /* Configure debug toggle output (P0.29, active-high). */
+    /* Configure debug toggle output (P0.25, active-high). */
     if (!gpio_is_ready_dt(&ppg_debug_gpio)) {
         LOG_ERR("PPG debug GPIO not ready");
         return -ENODEV;

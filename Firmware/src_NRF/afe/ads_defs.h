@@ -84,6 +84,9 @@
 /** @brief Bytes per EXG sample (ADS_A + ADS_B + counter_extra + reserved) */
 #define EXG_BYTES_PER_SAMPLE 50
 
+/** @brief Index where sample data begins (after header + counter + timestamp) */
+#define EXG_SAMPLE_DATA_START 7
+
 /** @brief Index where sample data ends (before metadata)
  *  Calculation: Header(1) + Counter(2) + Timestamp(4) + 4×50 = 207
  */
@@ -91,18 +94,23 @@
 
 /*==============================================================================
  * SPIM Instance Configuration
+ *
+ * The ADS1298 sits on SPI_A of the BioGAP mainboard, driven by SPIM4 —
+ * the nRF5340's dedicated high-speed instance (up to 32 MHz on these
+ * pins). Pin numbers must match the spi_a_default pinctrl in the board
+ * DTS (nrf5340_senseiv1_cpuapp.dts).
  *============================================================================*/
 
-/** @brief SPIM instance index to be used for ADS1298 communication */
-#define SPIM_INST_IDX 2
+/** @brief SPIM instance index to be used for ADS1298 communication (SPI_A) */
+#define SPIM_INST_IDX 4
 
-/** @brief MOSI pin number for SPI communication */
+/** @brief MOSI pin number for SPI communication (SPI_A_MOSI = P0.09) */
 #define MOSI_PIN 9
 
-/** @brief MISO pin number for SPI communication */
+/** @brief MISO pin number for SPI communication (SPI_A_MISO = P0.10) */
 #define MISO_PIN 10
 
-/** @brief SCK (clock) pin number for SPI communication */
+/** @brief SCK (clock) pin number for SPI communication (SPI_A_CLK = P0.08) */
 #define SCK_PIN 8
 
 /*==============================================================================

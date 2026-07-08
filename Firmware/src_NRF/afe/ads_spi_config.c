@@ -35,6 +35,7 @@
  */
 
 /* Zephyr RTOS headers */
+#include <errno.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -87,10 +88,10 @@ extern uint16_t counter;
  *
  * @param[in] ads_id Device to verify (ADS1298_A or ADS1298_B)
  *
- * @note If ID check fails, function enters infinite loop with error logging
+ * @return 0 if the ID matches 0xD2, -EIO otherwise
  * @note 30ms delays allow device to complete operations per datasheet timing
  */
-void ads_check_id(ads_device_id_t ads_id) {
+int ads_check_id(ads_device_id_t ads_id) {
 
   // RESET DEVICE
   pr_word[0] = _RESET;
@@ -113,12 +114,13 @@ void ads_check_id(ads_device_id_t ads_id) {
   k_msleep(30);
 
   if (ads_rx_buf[2] != 0xd2) {
-    // Wait here if ID is not correct
-    while (1) {
-      LOG_ERR("ADS1298 ID not correct");
-    }
+    LOG_ERR("ADS1298 %s ID readback 0x%02X (expected 0xD2) - "
+            "device unpowered, rails not up, or SPI failure",
+            (ads_id == ADS1298_A) ? "A" : "B", ads_rx_buf[2]);
+    return -EIO;
   }
   LOG_DBG("ADS1298 id checked");
+  return 0;
 }
 
 /*==============================================================================
@@ -136,8 +138,10 @@ void ads_check_id(ads_device_id_t ads_id) {
  * 5. Initialize BLE packet buffer
  *
  * @param[in] InitParams Configuration parameter array:
- *   - [0]: Data rate code (0=16kSPS to 6=250SPS)
- *        Common values: 2=1kSPS, 3=500SPS
+ *   - [0]: Data rate code written to CONFIG1 DR[2:0]. CONFIG1 bit7 (HR) is
+ *        set here (base 0xC0), so these are High-Resolution-mode rates:
+ *        3=4kSPS, 4=2kSPS, 5=1kSPS, 6=500SPS (firmware default).
+ *        In low-power mode each rate would be halved.
  *   - [1]: Channel input configuration
  *        0x00=Normal electrode input
  *        0x01=Shorted input (offset calibration)

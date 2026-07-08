@@ -200,8 +200,12 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
           ble_packet[1] = (uint8_t)(packet_counter & 0xFF);
           ble_packet[2] = (uint8_t)((packet_counter >> 8) & 0xFF);
 
-          /* Add timestamp (microseconds) for synchronization */
-          uint32_t timestamp_us = k_cyc_to_us_floor32(k_cycle_get_32());
+          /* Timestamp the FIRST sample of the packet (harmonized convention):
+           * one DMIC block == one packet, so it has just been delivered and
+           * 'now' ≈ the last sample's time; back-date by (N-1)/fs to reference
+           * the first sample so that sample_i ≈ ts + i / fs. */
+          uint32_t timestamp_us = k_cyc_to_us_floor32(k_cycle_get_32())
+                                  - (MIC_SAMPLES_PER_PACKET - 1U) * 1000000U / MIC_MAX_SAMPLE_RATE;
           ble_packet[3] = (uint8_t)(timestamp_us & 0xFF);
           ble_packet[4] = (uint8_t)((timestamp_us >> 8) & 0xFF);
           ble_packet[5] = (uint8_t)((timestamp_us >> 16) & 0xFF);

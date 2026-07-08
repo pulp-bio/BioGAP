@@ -107,11 +107,13 @@ void ads_init(uint8_t *InitParams, ads_device_id_t ads_id);
  * @brief Verify ADS1298 device ID
  *
  * Reads the device ID register and verifies it matches the expected value (0xD2).
- * Enters infinite loop with error logging if ID check fails.
+ * A wrong readback usually means the ADS rails are not up (PMIC/battery issue)
+ * or the shield is not mounted.
  *
  * @param ads_id Device identifier (ADS1298_A or ADS1298_B)
+ * @return 0 if the ID matches, -EIO otherwise
  */
-void ads_check_id(ads_device_id_t ads_id);
+int ads_check_id(ads_device_id_t ads_id);
 
 
 /*==============================================================================

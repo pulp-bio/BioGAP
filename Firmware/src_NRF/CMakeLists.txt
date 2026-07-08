@@ -61,9 +61,6 @@ target_sources(app PRIVATE
     # Sensors - Microphone
     sensors/mic/mic_appl.c
 
-    # Sensors - PPG (MAX86150 via shield)
-    sensors/ppg/ppg_appl.c
-
     # Sensors - EEG
     sensors/eeg/eeg_appl.c
 
