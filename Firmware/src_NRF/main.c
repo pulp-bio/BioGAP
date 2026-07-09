@@ -95,10 +95,6 @@ int main(void) {
   if (pwr_init()) {
     LOG_ERR("PWR Init failed!");
   }
-  // pwr_start();
-  //if (pwr_bsp_start()) {
-  //  LOG_ERR("PWR BSP Start failed!");
-  //}
 
   if (!device_is_ready(uart_dev)) {
     LOG_ERR("CDC ACM device not ready");
@@ -112,6 +108,20 @@ int main(void) {
 
 //  LOG_INF("Enabling charge...");
   pwr_charge_enable();
+
+  /* Start the SDK power thread: refreshes the battery/charger telemetry
+   * cache every THREAD_PWR_UPDATE_PERIOD_MS (and on PMIC nIRQ) and
+   * re-applies the charger config periodically. Runs at the lowest
+   * priority and never touches the VDx/VAx rails. The LED rail stays off
+   * (CONFIG_PWR_START_LED_POWER=0) and the SDK long-press shutdown stays
+   * disabled in favour of the app's soft-reset -> factory-ship path
+   * (CONFIG_PWR_LONG_PRESS_KILL=0); both set in CMakeLists.txt. Started
+   * after pwr_charge_enable() so the periodic charger re-config re-applies
+   * the final charger settings. */
+  if (pwr_start()) {
+    LOG_ERR("PWR Start failed!");
+  }
+
 //  LOG_INF("Initializing ADS...");
   ret = ads_dr_init();
 
@@ -134,7 +144,7 @@ int main(void) {
   //  LOG_INF("Microphone initialized");
  // }
 
-  // Initialize IMU (LIS2DUXS12 accelerometer)
+  // Initialize IMU (LSM6DSV16BX accelerometer + gyroscope)
   LOG_INF("Initializing IMU...");
   if (imu_init() != 0) {
     LOG_WRN("IMU initialization failed - IMU streaming disabled");

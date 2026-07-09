@@ -28,7 +28,6 @@
 #include "ble/ble_appl.h"
 #include "afe/ads_appl.h"
 #include "afe/ads_spi.h"
-#include "bsp/battery/battery.h"
 #include "bsp/system_status/system_status.h"
 #include "core/common.h"
 #include "core/sync_streaming.h"
@@ -36,7 +35,6 @@
 #include "sensors/eeg/eeg_appl.h"
 #include "sensors/emg/emg_appl.h"
 #include "sensors/imu/imu_appl.h"
-#include "sensors/imu/lis2duxs12_sensor.h"
 #include "sensors/mic/mic_appl.h"
 #if defined(CONFIG_SENSOR_WULPUS)
 #include "sensors/wulpus/wulpus_appl.h"
@@ -139,6 +137,18 @@ static void handle_ble_command(uint8_t cmd) {
       LOG_ERR("Failed to build battery status packet");
     }
     break;
+
+  case REQUEST_SYSTEM_STATUS: {
+    LOG_DBG("Ping REQUEST_SYSTEM_STATUS");
+    size_t status_len = 0;
+    uint8_t status_data[SYSTEM_STATUS_PACKET_LEN];
+    if (system_status_build_system_status_packet(status_data, sizeof(status_data), &status_len) == 0) {
+      send_data_ble(status_data, (uint16_t)status_len);
+    } else {
+      LOG_ERR("Failed to build system status packet");
+    }
+    break;
+  }
 
   case GET_DEVICE_SETTINGS:
     LOG_DBG("Ping GET_DEVICE_SETTINGS");

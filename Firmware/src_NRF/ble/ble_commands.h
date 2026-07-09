@@ -71,5 +71,11 @@
 #define STOP_PPG_STREAMING 40
 #define START_WULPUS_STREAMING 41
 #define STOP_WULPUS_STREAMING 42
+/* Extended battery/system status (v2). Response header 43 = 0x2B is chosen
+ * to not collide with any streaming packet header (0x55 ExG, 0x56 IMU,
+ * 0xAA MIC, 0x10-0x13 WULPUS, 0x70 PPG) - unlike the legacy
+ * REQUEST_BATTERY_STATE echo (17 = 0x11), which is ambiguous with WULPUS
+ * chunk 2 during ultrasound streaming. */
+#define REQUEST_SYSTEM_STATUS 43
 
 #endif // BLE_COMMANDS_H
