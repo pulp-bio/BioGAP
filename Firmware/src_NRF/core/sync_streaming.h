@@ -95,7 +95,7 @@
 typedef enum {
     SYNC_SUBSYSTEM_EXG = 0,  /**< EXG/ADS1298 bio-potential acquisition subsystem */
     SYNC_SUBSYSTEM_MIC = 1,  /**< PDM microphone audio capture subsystem */
-    SYNC_SUBSYSTEM_IMU = 2,  /**< IMU/LIS2DUXS12 accelerometer subsystem */
+    SYNC_SUBSYSTEM_IMU = 2,  /**< IMU/LSM6DSV16BX accel+gyro subsystem */
     SYNC_SUBSYSTEM_COUNT     /**< Total number of syncable subsystems (max barrier size) */
 } sync_subsystem_t;
 

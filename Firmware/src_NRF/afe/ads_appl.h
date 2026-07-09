@@ -61,7 +61,6 @@ typedef enum {
   ADS_CONNECT,        /**< Establish connection */
   ADS_RESTART_WOLF,   /**< Restart Biowolf system */
   ADS_TOGGLE_DRDY,    /**< Toggle data ready pin monitoring */
-  ADS_READ_BATTERY,   /**< Read battery status */
   ADS_PROGRAM_WOLF,   /**< Program Biowolf firmware */
   ADS_ES_QUALITY      /**< Electrode-skin quality measurement */
 } ads_function_t;

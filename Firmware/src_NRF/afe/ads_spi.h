@@ -147,7 +147,7 @@ int ads_dr_read();
  * 3. Constructs BLE packets for transmission
  * 4. Manages packet counters and triggers
  *
- * @note IMU data is now sent independently via lis2duxs12_sensor.c
+ * @note IMU data is now sent independently via sensors/imu/imu_appl.c
  * @note This function checks the ads_data_ready flag set by the DRDY interrupt
  */
 void process_ads_data();

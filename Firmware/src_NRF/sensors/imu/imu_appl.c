@@ -31,13 +31,13 @@
  * @file imu_appl.c
  * @brief IMU Application Layer Implementation
  *
- * Implements the application-level control for the LIS2DUXS12 IMU including
- * accelerometer data acquisition and BLE streaming.
+ * Implements the application-level control for the LSM6DSV16BX 6-axis IMU
+ * including accelerometer + gyroscope data acquisition and BLE streaming.
  */
 
 #include "sensors/imu/imu_appl.h"
 #include "ble/ble_appl.h"
-#include "sensors/imu/lis2duxs12_sensor.h"
+#include "sensors/imu/lsm6dsv16bx_sensor.h"
 #include "core/sync_streaming.h"
 
 #include <zephyr/kernel.h>
@@ -112,14 +112,14 @@ static void imu_packet_init(void) {
 /**
  * @brief Add a sample to the IMU packet buffer and send if full
  *
- * Adds accelerometer X, Y, Z data to the packet. When the packet
- * contains IMU_SAMPLES_PER_PACKET samples, it is sent via BLE.
+ * Adds one 6-axis sample (accelerometer X/Y/Z + gyroscope X/Y/Z) to the
+ * packet. When the packet contains IMU_SAMPLES_PER_PACKET samples, it is
+ * sent via BLE.
  *
- * @param x Acceleration X (raw int16_t)
- * @param y Acceleration Y (raw int16_t)
- * @param z Acceleration Z (raw int16_t)
+ * @param accel Acceleration X, Y, Z (raw int16_t)
+ * @param gyro  Angular rate X, Y, Z (raw int16_t)
  */
-static void imu_packet_add_sample(int16_t x, int16_t y, int16_t z) {
+static void imu_packet_add_sample(const int16_t accel[3], const int16_t gyro[3]) {
   /* Capture timestamp on first sample */
   if (imu_sample_count == 0) {
     imu_packet_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
@@ -130,13 +130,15 @@ static void imu_packet_add_sample(int16_t x, int16_t y, int16_t z) {
     imu_tx_buf[6] = (uint8_t)((imu_packet_timestamp >> 24) & 0xFF);
   }
 
-  /* Add X, Y, Z accelerometer data (big-endian) */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(x >> 8);    /* X high byte */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(x & 0xFF);  /* X low byte */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(y >> 8);    /* Y high byte */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(y & 0xFF);  /* Y low byte */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(z >> 8);    /* Z high byte */
-  imu_tx_buf[imu_buf_idx++] = (uint8_t)(z & 0xFF);  /* Z low byte */
+  /* Add accelerometer X, Y, Z followed by gyroscope X, Y, Z (big-endian) */
+  for (int axis = 0; axis < 3; axis++) {
+    imu_tx_buf[imu_buf_idx++] = (uint8_t)(accel[axis] >> 8);
+    imu_tx_buf[imu_buf_idx++] = (uint8_t)(accel[axis] & 0xFF);
+  }
+  for (int axis = 0; axis < 3; axis++) {
+    imu_tx_buf[imu_buf_idx++] = (uint8_t)(gyro[axis] >> 8);
+    imu_tx_buf[imu_buf_idx++] = (uint8_t)(gyro[axis] & 0xFF);
+  }
 
   imu_sample_count++;
 
@@ -157,7 +159,8 @@ static void imu_packet_add_sample(int16_t x, int16_t y, int16_t z) {
  * @brief IMU streaming thread
  *
  * Main thread for IMU data acquisition. Waits for start signal, initializes
- * sensor, then continuously reads accelerometer data and sends it over BLE.
+ * sensor, then continuously reads accelerometer + gyroscope data and sends
+ * it over BLE.
  */
 static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
   ARG_UNUSED(arg1);
@@ -165,7 +168,7 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
   ARG_UNUSED(arg3);
 
   int ret;
-  int16_t x, y, z;
+  int16_t accel[3], gyro[3];
 
   LOG_INF("IMU streaming thread started");
 
@@ -178,19 +181,19 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
 
     /* Initialize the sensor if not already done */
     if (!imu_initialized) {
-      ret = lis2duxs12_init();
+      ret = lsm6dsv16bx_sensor_init();
       if (ret != 0) {
-        LOG_ERR("Failed to initialize LIS2DUXS12: %d", ret);
+        LOG_ERR("Failed to initialize LSM6DSV16BX: %d", ret);
         imu_state = IMU_STATE_ERROR;
         continue;
       }
       imu_initialized = true;
     }
 
-    /* Start accelerometer sampling at 400Hz */
-    ret = lis2duxs12_start_sampling();
+    /* Start accelerometer + gyroscope sampling at 480Hz */
+    ret = lsm6dsv16bx_start_sampling();
     if (ret != 0) {
-      LOG_ERR("Failed to start LIS2DUXS12 sampling: %d", ret);
+      LOG_ERR("Failed to start LSM6DSV16BX sampling: %d", ret);
       imu_state = IMU_STATE_ERROR;
       continue;
     }
@@ -201,7 +204,7 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
       ret = sync_wait(SYNC_SUBSYSTEM_IMU, 5000);
       if (ret != 0) {
         LOG_ERR("Sync wait failed: %d", ret);
-        lis2duxs12_stop_sampling();
+        lsm6dsv16bx_stop_sampling();
         imu_state = IMU_STATE_ERROR;
         continue;
       }
@@ -215,7 +218,7 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
 
     /* Streaming loop - wait for DRDY interrupt and read data */
     while (imu_keep_running) {
-      ret = lis2duxs12_wait_data_ready(IMU_READ_TIMEOUT);
+      ret = lsm6dsv16bx_wait_data_ready(IMU_READ_TIMEOUT);
       if (ret != 0) {
         if (ret == -EAGAIN) {
           /* Timeout - check if we should keep running */
@@ -225,21 +228,21 @@ static void imu_streaming_thread(void *arg1, void *arg2, void *arg3) {
         break;
       }
 
-      ret = lis2duxs12_read_accel(&x, &y, &z);
+      ret = lsm6dsv16bx_read_accel_gyro(accel, gyro);
       if (ret != 0) {
-        LOG_ERR("Failed to read accelerometer: %d", ret);
+        LOG_ERR("Failed to read IMU data: %d", ret);
         continue;
       }
 
       /* Add sample to packet (sends automatically when full) */
-      imu_packet_add_sample(x, y, z);
+      imu_packet_add_sample(accel, gyro);
     }
 
-    /* Stop accelerometer sampling */
+    /* Stop accelerometer + gyroscope sampling */
     imu_state = IMU_STATE_STOPPING;
-    ret = lis2duxs12_stop_sampling();
+    ret = lsm6dsv16bx_stop_sampling();
     if (ret != 0) {
-      LOG_ERR("Failed to stop LIS2DUXS12: %d", ret);
+      LOG_ERR("Failed to stop LSM6DSV16BX: %d", ret);
     }
 
     imu_state = IMU_STATE_IDLE;
@@ -263,10 +266,10 @@ int imu_init(void) {
     return 0;
   }
 
-  /* Initialize the LIS2DUXS12 sensor */
-  ret = lis2duxs12_init();
+  /* Initialize the LSM6DSV16BX sensor */
+  ret = lsm6dsv16bx_sensor_init();
   if (ret != 0) {
-    LOG_ERR("Failed to initialize LIS2DUXS12: %d", ret);
+    LOG_ERR("Failed to initialize LSM6DSV16BX: %d", ret);
     return ret;
   }
 
@@ -333,5 +336,5 @@ int imu_read_temperature(float *temp_celsius) {
     return -ENODEV;
   }
 
-  return lis2duxs12_read_temperature(temp_celsius);
+  return lsm6dsv16bx_read_temperature(temp_celsius);
 }

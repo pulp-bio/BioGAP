@@ -42,7 +42,6 @@ target_sources(app PRIVATE
 
     # BSP
     bsp/pwr_bsp.c
-    bsp/battery/battery.c
     bsp/power/power.c
     bsp/system_status/system_status.c
 
@@ -55,8 +54,8 @@ target_sources(app PRIVATE
 
     # Sensors - IMU
     sensors/imu/imu_appl.c
-    sensors/imu/lis2duxs12_sensor.c
-    sensors/imu/driver/lis2duxs12_reg.c
+    sensors/imu/lsm6dsv16bx_sensor.c
+    sensors/imu/driver/lsm6dsv16bx_reg.c
 
     # Sensors - Microphone
     sensors/mic/mic_appl.c
@@ -94,4 +93,16 @@ target_include_directories(app PRIVATE
     # Needed so maxm86161.c and maxm86161.h can use bare #include "maxm86161_i2c.h"
     # etc. without full path prefixes.
     sensors/ppg_new
+)
+
+# SDK power-thread policy (the SDK pwr sources build as part of the app
+# target, so plain target definitions reach them):
+# - keep the LED rail off in pwr_start(): the LED is unused on BioGAP and no
+#   non-essential power domain may come up as a side effect.
+# - keep the SDK long-press pwr_kill() disabled: the soft-reset button is
+#   already handled by the app (any press -> PMIC factory-ship in main.c),
+#   and both shutdown paths would race.
+target_compile_definitions(app PRIVATE
+    CONFIG_PWR_START_LED_POWER=0
+    CONFIG_PWR_LONG_PRESS_KILL=0
 )

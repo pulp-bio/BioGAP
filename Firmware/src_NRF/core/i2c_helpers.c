@@ -77,7 +77,7 @@ void resole_address_to_name(uint8_t address, char *name) {
     strcpy(name, "GAP9 (RISC-V SoC)");
     break;
   case 0x19:
-    strcpy(name, "LIS2DUXS12 (Accelerometer)");
+    strcpy(name, "LIS2DUXS12 (Accelerometer, pre-2026 boards)");
     break;
   case 0x24:
     strcpy(name, "HM0360 (Camera)");
@@ -89,7 +89,7 @@ void resole_address_to_name(uint8_t address, char *name) {
     strcpy(name, "IS31FL3194 (LED Driver)");
     break;
   case 0x6A:
-    strcpy(name, "ISM330DHCX (IMU)");
+    strcpy(name, "LSM6DSV16BX (IMU)");
     break;
   case 0x76:
     strcpy(name, "BME680 (Environmental Sensor)");
