@@ -36,17 +36,19 @@
 int system_status_init(void);
 
 /**
- * @brief Build the legacy 7-byte battery/status BLE response (command 17).
+ * @brief Build the legacy 7-byte battery/status response (command 17).
  *
  * Byte layout is kept byte-for-byte compatible with the original BioGAP GUI.
  * All values come from the SDK power-thread cache - no PMIC/I2C access.
+ * Transport-agnostic: the caller sends the built buffer over BLE or the
+ * WiFi/SD shield.
  *
  * @param buffer Pointer to the buffer where the packet will be built.
  * @param buf_size Size of the buffer.
  * @param out_len Pointer to store the resulting packet length.
  * @return 0 on success, negative on error (e.g., buffer too small).
  */
-int system_status_build_ble_packet(uint8_t *buffer, size_t buf_size, size_t *out_len);
+int system_status_build_packet(uint8_t *buffer, size_t buf_size, size_t *out_len);
 
 /**
  * @brief Build the extended system-status BLE response (command 43).

@@ -37,6 +37,9 @@
 #include "sensors/mic/mic_appl.h"
 #include "ble/ble_appl.h"
 #include "core/sync_streaming.h"
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
 
 #include <string.h>
 #include <zephyr/audio/dmic.h>
@@ -213,8 +216,12 @@ static void mic_streaming_thread(void *arg1, void *arg2, void *arg3) {
           
           ble_packet[MIC_PCKT_SIZE - 1] = MIC_DATA_TRAILER;
 
-          /* Send via BLE queue */
+          /* Send via BLE or WiFi/SD shield queue */
+#if defined(CONFIG_WI_FI)
+          add_data_to_esp_send_buffer(ble_packet, MIC_PCKT_SIZE);
+#else
           add_data_to_send_buffer(ble_packet, MIC_PCKT_SIZE);
+#endif
 
           /* Prepare next packet */
           packet_counter++;

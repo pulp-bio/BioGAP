@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 # Enable shields
-set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield")
+set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield SENSEI_WiFi_SD_Shield_V1")
 
 set(CONF_FILE prj.conf)
 
@@ -22,9 +22,16 @@ add_custom_target(print_sensei_sdk_root ALL
     COMMENT "Printing SENSEI_SDK_ROOT at build time"
 )
 
-list(APPEND EXTRA_ZEPHYR_MODULES
-    ${SENSEI_SDK_ROOT}/NRF
-)
+# NOTE: the CMake variable Zephyr's build system actually reads is
+# ZEPHYR_EXTRA_MODULES (not EXTRA_ZEPHYR_MODULES) -- must be FORCEd into the
+# cache so it's visible to find_package(Zephyr) below.
+set(ZEPHYR_EXTRA_MODULES "${SENSEI_SDK_ROOT}/NRF")
+set(ZEPHYR_EXTRA_MODULES "${ZEPHYR_EXTRA_MODULES}" CACHE STRING "Zephyr extra modules" FORCE)
+message(STATUS "ZEPHYR_EXTRA_MODULES: '${ZEPHYR_EXTRA_MODULES}'")
+
+if(NOT EXISTS "${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml")
+    message(FATAL_ERROR "Expected Zephyr module metadata at '${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml' -- check SENSEI_SDK_ROOT")
+endif()
 
 # Configure the project
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
@@ -39,11 +46,15 @@ target_sources(app PRIVATE
     core/sync_streaming.c
     core/i2c_helpers.c
     core/board_sync.c
+    core/command_dispatcher.c
 
     # BSP
     bsp/pwr_bsp.c
     bsp/power/power.c
     bsp/system_status/system_status.c
+
+    # SPI (shared SPI_A bus -- ADS1298 and WiFi/SD shield both sit on it)
+    spi/spi_a.c
 
     # AFE (Analog Front-End - ADS1298)
     afe/ads_appl.c
@@ -92,6 +103,26 @@ if(CONFIG_SENSOR_PPG_NEW)
         sensors/ppg_new/maxm86161_i2c.c
         sensors/ppg_new/maxm86161.c
         sensors/ppg_new/ppg_new_appl.c
+    )
+endif()
+
+# WiFi/SD shield (ESP32-C6): alternative to BLE for streaming sensor data.
+# Shares SPI_A (spi/spi_a.c) with the ADS1298. The command dispatcher itself
+# (core/command_dispatcher.c) is unconditional above, since BLE routes
+# through it too.
+if(CONFIG_WI_FI)
+    target_sources(app PRIVATE
+        wifi_sd_shield/wifi_sd_shield_appl.c
+        wifi_sd_shield/wifi_sd_shield_inits.c
+        wifi_sd_shield/wifi_sd_spi_functions.c
+    )
+endif()
+
+# Dummy sensor (synthetic data, no hardware required): sends over BLE or
+# the WiFi shield depending on CONFIG_WI_FI, handled internally by the file.
+if(CONFIG_DUMMY_SENSOR)
+    target_sources(app PRIVATE
+        sensors/dummy_sensor/dummy_sensor_appl.c
     )
 endif()
 

@@ -61,6 +61,13 @@
 #if defined(CONFIG_SENSOR_WULPUS)
 #include "sensors/wulpus/wulpus_appl.h"
 #endif
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_inits.h"
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
+#if defined(CONFIG_DUMMY_SENSOR)
+#include "sensors/dummy_sensor/dummy_sensor_appl.h"
+#endif
 
 // Inter-board hardware synchronization
 #include "core/board_sync.h"
@@ -143,9 +150,32 @@ int main(void) {
  // gap9_pwr(true);
   LOG_INF("GAP9 powered up");
 
+#if defined(CONFIG_WI_FI)
+  LOG_INF("Initializing Wi-Fi/SD shield...");
+  ret = wifi_sd_shield_cs_init();
+  if (ret != 0) {
+    LOG_ERR("Wi-Fi/SD shield initialization failed");
+  }
+  ret = initial_handshake_nrf_esp();
+  if (ret != 0) {
+    LOG_ERR("Initial handshake with ESP32 failed - Wi-Fi communication not established");
+  } else {
+    LOG_INF("Wi-Fi/SD shield initialized");
+  }
+#else
   struct uart_data_t *buf = k_malloc(sizeof(*buf));
   LOG_INF("Starting BLE adverts...");
   start_bluetooth_adverts();
+#endif
+
+#if defined(CONFIG_DUMMY_SENSOR)
+  LOG_INF("Initializing Dummy Sensor...");
+  if (dummy_sensor_init() != 0) {
+    LOG_ERR("Dummy sensor initialization failed");
+  } else {
+    LOG_INF("Dummy sensor initialized");
+  }
+#endif
 
   // Initialize microphone
   LOG_INF("Initializing microphone...");

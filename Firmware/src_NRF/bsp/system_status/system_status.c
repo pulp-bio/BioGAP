@@ -13,7 +13,7 @@
 
 #include "bsp/system_status/system_status.h"
 #include "sensors/imu/imu_appl.h"
-#include "ble/ble_commands.h"
+#include "core/connectivity_commands.h"
 #include "ble/bluetooth.h"
 #include "core/common.h"
 #include "afe/ads_defs.h"
@@ -21,6 +21,9 @@
 #include <stdbool.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
 
 LOG_MODULE_REGISTER(system_status, LOG_LEVEL_INF);
 
@@ -53,7 +56,7 @@ int system_status_init(void) {
     return 0;
 }
 
-int system_status_build_ble_packet(uint8_t *buffer, size_t buf_size, size_t *out_len) {
+int system_status_build_packet(uint8_t *buffer, size_t buf_size, size_t *out_len) {
     if (buf_size < 7) {
         return -1; // Buffer too small for standard 7-byte status packet
     }
@@ -135,7 +138,11 @@ void system_status_send_hardware_version(void) {
     data[1] = HARDWARE_VERSION;
     data[2] = HARDWARE_REVISION;
     data[3] = BLE_PCK_TAILER;
+#if defined(CONFIG_WI_FI)
+    add_data_to_esp_send_buffer(data, sizeof(data));
+#else
     send_data_ble(data, sizeof(data));
+#endif
 }
 
 void system_status_send_firmware_version(void) {
@@ -144,7 +151,11 @@ void system_status_send_firmware_version(void) {
     data[1] = FIRMWARE_VERSION;
     data[2] = FIRMWARE_REVISION;
     data[3] = BLE_PCK_TAILER;
+#if defined(CONFIG_WI_FI)
+    add_data_to_esp_send_buffer(data, sizeof(data));
+#else
     send_data_ble(data, sizeof(data));
+#endif
 }
 
 void system_status_send_available_sensors(void) {
@@ -153,7 +164,11 @@ void system_status_send_available_sensors(void) {
     data[1] = true;
     data[2] = 0;
     data[3] = BLE_PCK_TAILER;
+#if defined(CONFIG_WI_FI)
+    add_data_to_esp_send_buffer(data, sizeof(data));
+#else
     send_data_ble(data, sizeof(data));
+#endif
 }
 
 void system_status_send_device_settings(void) {
@@ -162,7 +177,11 @@ void system_status_send_device_settings(void) {
 
 void system_status_send_ready(void) {
     uint8_t ready[5] = {'B', 'W', 'F', '1', '6'};
+#if defined(CONFIG_WI_FI)
+    add_data_to_esp_send_buffer(ready, sizeof(ready));
+#else
     send_data_ble(ready, sizeof(ready));
+#endif
 }
 
 /*==============================================================================

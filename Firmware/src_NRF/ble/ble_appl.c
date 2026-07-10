@@ -26,19 +26,9 @@
  * limitations under the License.
  */
 #include "ble/ble_appl.h"
-#include "afe/ads_appl.h"
-#include "afe/ads_spi.h"
 #include "bsp/system_status/system_status.h"
 #include "core/common.h"
-#include "core/sync_streaming.h"
-#include "sensors/ppg_new/ppg_new_appl.h"
-#include "sensors/eeg/eeg_appl.h"
-#include "sensors/emg/emg_appl.h"
-#include "sensors/imu/imu_appl.h"
-#include "sensors/mic/mic_appl.h"
-#if defined(CONFIG_SENSOR_WULPUS)
-#include "sensors/wulpus/wulpus_appl.h"
-#endif
+#include "core/command_dispatcher.h"
 
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
@@ -117,272 +107,6 @@ static void forward_to_gap9(void) {
 }
 
 /**
- * @brief Process BLE Command
- *
- * Handles all BLE commands received from the connected device.
- * Commands include battery state requests, device settings, streaming
- * control (Nordic and microphone), board state management, and more.
- *
- * @param cmd The command byte received from BLE (first byte of packet)
- */
-static void handle_ble_command(uint8_t cmd) {
-  switch (cmd) {
-  case REQUEST_BATTERY_STATE:
-    LOG_DBG("Ping REQUEST_BATTERY_STATE");
-    size_t out_len = 0;
-    uint8_t bat_data[7];
-    if (system_status_build_ble_packet(bat_data, sizeof(bat_data), &out_len) == 0) {
-      send_data_ble(bat_data, (uint16_t)out_len);
-    } else {
-      LOG_ERR("Failed to build battery status packet");
-    }
-    break;
-
-  case REQUEST_SYSTEM_STATUS: {
-    LOG_DBG("Ping REQUEST_SYSTEM_STATUS");
-    size_t status_len = 0;
-    uint8_t status_data[SYSTEM_STATUS_PACKET_LEN];
-    if (system_status_build_system_status_packet(status_data, sizeof(status_data), &status_len) == 0) {
-      send_data_ble(status_data, (uint16_t)status_len);
-    } else {
-      LOG_ERR("Failed to build system status packet");
-    }
-    break;
-  }
-
-  case GET_DEVICE_SETTINGS:
-    LOG_DBG("Ping GET_DEVICE_SETTINGS");
-    system_status_send_device_settings();
-    break;
-
-  case SET_DEVICE_SETTINGS:
-    LOG_DBG("Ping SET_DEVICE_SETTINGS");
-    break;
-
-  case REQUEST_CONNECTING_STRING:
-    LOG_DBG("Ping REQUEST_CONNECTING_STRING");
-    system_status_send_ready();
-    break;
-
-  case REQUEST_HARDWARE_VERSION:
-    LOG_DBG("Ping REQUEST_HARDWARE_VERSION");
-    system_status_send_hardware_version();
-    break;
-
-  case REQUEST_FIRMWARE_VERSION:
-    LOG_DBG("Ping REQUEST_FIRMWARE_VERSION");
-    system_status_send_firmware_version();
-    break;
-
-  case REQUEST_AVAILABLE_SENSORS:
-    LOG_DBG("Ping REQUEST_AVAILABLE_SENSORS");
-    system_status_send_available_sensors();
-    break;
-
-  case GET_BOARD_STATE: {
-    LOG_DBG("Ping GET_BOARD_STATE");
-    int8_t current_state = system_status_get_board_state();
-    LOG_DBG("Sending current state: %d", current_state);
-    send_data_ble(&current_state, 1);
-    break;
-  }
-
-  case SET_BOARD_STATE:
-    LOG_DBG("Ping SET_BOARD_STATE");
-    LOG_DBG(".data[1], %d", ble_data_available.data[1]);
-    LOG_DBG(".data[2], %d", ble_data_available.data[2]);
-
-    if (ble_data_available.data[1] == 1) {
-      system_status_set_board_state(STATE_STREAMING_NORDIC);
-    } else {
-      system_status_set_board_state(STATE_GAP9_MASTER);
-    }
-
-    if (system_status_get_board_state() == STATE_STREAMING_NORDIC) {
-      ads_set_function(ADS_STILL);
-    } else {
-      ads_set_function(ADS_INIT_GAP9_CTRL);
-    }
-    break;
-
-  case RESET_GAP9:
-    LOG_DBG("Ping RESET_GAP9");
-    break;
-
-  case RESET_BOARD:
-    LOG_DBG("Ping RESET_BOARD");
-    break;
-
-  case SET_TRIGGER_STATE:
-    LOG_DBG("Ping SET_TRIGGER_STATE (deprecated - trigger removed)");
-    break;
-
-  case ENTER_BOOTLOADERT_MODE:
-    LOG_DBG("Ping ENTER_BOOTLOADER_MODE");
-    break;
-
-  case GO_TO_SLEEP:
-    LOG_DBG("Ping GO_TO_SLEEP");
-    break;
-
-  case START_EEG_STREAMING:
-    LOG_INF("Ping START_EEG_STREAMING");
-    ble_reset_packet_counters(); /* Reset packet counters for new session */
-    eeg_start_streaming();
-    break;
-
-  case STOP_EEG_STREAMING:
-    LOG_INF("Ping STOP_EEG_STREAMING");
-    eeg_stop_streaming();
-    ble_print_packet_stats(); /* Print BLE packet stats */
-    break;
-
-  case START_EMG_STREAMING:
-    LOG_INF("Ping START_EMG_STREAMING");
-    ble_reset_packet_counters(); /* Reset packet counters for new session */
-    LOG_INF("Starting EMG streaming");
-    emg_start_streaming();
-    break;
-
-  case STOP_EMG_STREAMING:
-    LOG_INF("Ping STOP_EMG_STREAMING");
-    emg_stop_streaming();
-    ble_print_packet_stats(); /* Print BLE packet stats */
-    break;
-
-  case START_PPG_STREAMING:
-    #if defined(CONFIG_SENSOR_PPG_NEW)
-    LOG_INF("Ping START_PPG_STREAMING");
-    ble_reset_packet_counters();
-    {
-      /*
-       * BLE packet layout (bytes after command code 39):
-       *   [1]  sensor_mask
-       *   [2]  sample_rate_hz
-       *   [3]  led_green     (0x00 = disable)
-       *   [4]  led_ir        (0x00 = disable)
-       *   [5]  led_red       (0x00 = disable)
-       *   [6]  led_range     (0–3 index)
-       *   [7]  tint          (0–3 index)
-       *   [8]  adc_range     (0–3 index)
-       *   [9]  sample_avg    (0–7 index)
-       *   [10] alc_enable    (0/1)
-       *   [11] proximity_enable (0/1)
-       * Total packet size: 12 bytes (cmd + 11 config bytes).
-       * If the packet is shorter than expected, missing bytes fall back to
-       * sensible defaults so the GUI can omit trailing optional params.
-       */
-      const uint8_t *d = ble_data_available.data;
-      uint16_t       n = ble_data_available.size;
-
-      ppg_config_t pcfg = {
-        .sensor_mask      = (n >  1) ? d[1]  : 0x01,
-        .sample_rate_hz   = (n >  2) ? d[2]  : 125,
-        .led_green        = (n >  3) ? d[3]  : 0x7F,
-        .led_ir           = (n >  4) ? d[4]  : 0x7F,
-        .led_red          = (n >  5) ? d[5]  : 0x7F,
-        .led_range        = (n >  6) ? d[6]  : 3,   /* default 32k */
-        .tint             = (n >  7) ? d[7]  : 3,   /* default 117.3 µs */
-        .adc_range        = (n >  8) ? d[8]  : 3,   /* default 32k */
-        .sample_avg       = (n >  9) ? d[9]  : 0,   /* default 1x */
-        .alc_enable       = (n > 10) ? d[10] : 1,   /* default on */
-        .proximity_enable = (n > 11) ? d[11] : 0,   /* default off */
-      };
-
-      ppg_new_start_streaming(&pcfg);
-    }
-    #endif
-    break;
-
-  case STOP_PPG_STREAMING:
-    #if defined(CONFIG_SENSOR_PPG_NEW)
-    LOG_INF("Ping STOP_PPG_STREAMING");
-    ppg_new_stop_streaming();
-    //ble_print_packet_stats(); /* Print BLE packet stats */
-    #endif
-    break;
-
-  case START_MIC_STREAMING:
-    LOG_INF("Ping START_MIC_STREAMING");
-    mic_start_streaming();
-    break;
-
-  case STOP_MIC_STREAMING:
-    LOG_INF("Ping STOP_MIC_STREAMING");
-    mic_stop_streaming();
-    break;
-
-  case START_EEG_MIC_STREAMING:
-    LOG_DBG("Ping START_EEG_MIC_STREAMING");
-    ble_reset_packet_counters(); /* Reset packet counters for new session */
-    sync_begin(2);               /* Setup sync barrier for 2 subsystems (EEG + MIC) */
-    mic_start_streaming();
-    eeg_start_streaming();
-    break;
-  case STOP_EEG_MIC_STREAMING:
-    LOG_DBG("Ping STOP_EEG_MIC_STREAMING");
-    mic_stop_streaming();
-    eeg_stop_streaming();
-    ble_print_packet_stats(); /* Print BLE packet stats */
-    sync_reset();             /* Clean up sync state */
-    break;
-  case START_STREAMING_ALL:
-    LOG_DBG("Ping START_STREAMING_ALL");
-    ble_reset_packet_counters(); /* Reset packet counters for new session */
-    sync_begin(3);               /* Setup sync barrier for 2 subsystems (EEG + MIC + IMU) */
-    mic_start_streaming();
-    eeg_start_streaming();
-    imu_start_streaming();
-    break;
-  case STOP_STREAMING_ALL:
-    LOG_DBG("Ping STOP_STREAMING_ALL");
-    mic_stop_streaming();
-    eeg_stop_streaming();
-    imu_stop_streaming();
-    ble_print_packet_stats(); /* Print BLE packet stats */
-    sync_reset();             /* Clean up sync state */
-    break;
-  case START_IMU_STREAMING:
-    LOG_DBG("Ping START_IMU_STREAMING");
-    imu_start_streaming();
-    break;
-  case STOP_IMU_STREAMING:
-    LOG_DBG("Ping STOP_IMU_STREAMING");
-    imu_stop_streaming();
-    break;
-
-#if defined(CONFIG_SENSOR_WULPUS)
-  case START_WULPUS_STREAMING:
-    LOG_INF("Ping START_WULPUS_STREAMING");
-    /* Any bytes after the command code are forwarded as MSP430 config */
-    wulpus_set_msp_config(
-        ble_data_available.size > 1 ? ble_data_available.data + 1 : NULL,
-        ble_data_available.size > 1 ? ble_data_available.size - 1 : 0);
-    break;
-
-  case STOP_WULPUS_STREAMING:
-    LOG_INF("Ping STOP_WULPUS_STREAMING");
-    wulpus_stop();
-    break;
-#endif
-
-  default:
-    /*
-     * Command code not recognised – treat the full payload as MSP430
-     * configuration for the WULPUS dongle (which sends raw config bytes
-     * without a preceding command code, exactly as the old nRF52 firmware).
-     */
-#if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Unrecognised cmd %u – treating as WULPUS MSP430 config", cmd);
-    wulpus_set_msp_config(ble_data_available.data, ble_data_available.size);
-#else
-    LOG_WRN("Unrecognised BLE command: %u", cmd);
-#endif
-    break;
-  }
-}
-
-/**
  * @brief BLE Process Received Data Thread
  *
  * Main thread for processing data received over BLE. This thread waits
@@ -416,11 +140,10 @@ void process_received_data_thread(void *arg1, void *arg2, void *arg3) {
     }
 
     // Process BLE command
-    uint8_t cmd = ble_data_available.data[0];
     for (int k = 0; k < ble_data_available.size; k++) {
       LOG_DBG("Data[%d]: %d", k, ble_data_available.data[k]);
     }
-    handle_ble_command(cmd);
+    handle_connectivity_command(ble_data_available.data, (uint16_t)ble_data_available.size);
   }
 }
 
@@ -468,9 +191,11 @@ void add_data_to_send_buffer(uint8_t *data, uint16_t size) {
 }
 
 
+#ifndef CONFIG_WI_FI
 /* BLE Send Thread Definition */
 K_THREAD_DEFINE(ble_send_tid, BLE_SEND_STACK_SIZE, ble_send_thread, NULL, NULL, NULL, BLE_SEND_PRIORITY, 0, 0);
 
 /* BLE Receive Thread Definition */
 K_THREAD_DEFINE(ble_receive_tid, BLE_RECEIVE_STACK_SIZE, process_received_data_thread, NULL, NULL, NULL,
                 BLE_RECEIVE_PRIORITY, 0, 0);
+#endif

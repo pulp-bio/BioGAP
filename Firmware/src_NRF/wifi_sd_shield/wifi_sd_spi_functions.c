@@ -1,0 +1,191 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: wifi_sd_shield_spi_functions.c
+ *
+ * Last edited: 15.05.2026
+ *
+ * Copyright (C) 2026, ETH Zurich
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * @file wifi_sd_shield_spi_functions.h
+ * @brief Wi-Fi and SD Shield SPI Functions Interface
+ *
+ * This header contains the SPI function declarations for interacting with
+ * the Wi-Fi and SD shields. 
+*/
+
+
+#include "wifi_sd_spi_functions.h"
+#include "wifi_sd_shield_inits.h"
+#include "spi/spi_a.h"
+LOG_MODULE_REGISTER(wifi_sd_spi_functions, LOG_LEVEL_INF);
+
+/* Serialize async SPIM transfers so callers can treat the API as blocking. */
+K_SEM_DEFINE(spi_nrf_esp_transfer_done, 0, 1);
+
+/**
+ * @brief SPI_A completion handler for WiFi/SD transfers
+ *
+ * Called by the shared spi/spi_a.c interrupt dispatcher when the in-flight
+ * transfer's owner is SPI_A_OWNER_WIFI_SD. CS deassertion is already
+ * handled generically by spi_a.c (it was given &esp_cs_gpio in
+ * spi_a_begin_transfer()); this just wakes up the blocked caller.
+ */
+void wifi_sd_spim_transfer_complete(void) {
+    k_sem_give(&spi_nrf_esp_transfer_done);
+}
+
+/**
+ * @brief SPI master transmit/receive transaction
+ *
+ * Performs a full-duplex SPI master transaction with the ESP32 slave, on
+ * the shared SPI_A bus (spi/spi_a.h). Holds spi_a_mutex for the whole
+ * transfer (kickoff through completion) since this call already blocks on
+ * a completion semaphore -- unlike the ADS driver, there's no separate
+ * caller-side wait to fold this into.
+ *
+ * @param tx_buf Transmit buffer (NULL for dummy TX)
+ * @param rx_buf Receive buffer (NULL to discard RX)
+ * @param len Number of bytes to transfer
+ * @return 0 on success, negative error code on failure
+ */
+int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
+{
+    if (len == 0) {
+        return -EINVAL;
+    }
+
+    k_mutex_lock(&spi_a_mutex, K_FOREVER);
+
+    /* Drain any stale completion before starting a new async transfer. */
+    while (k_sem_take(&spi_nrf_esp_transfer_done, K_NO_WAIT) == 0) {
+    }
+
+    /* Configure SPI transaction buffers */
+    nrfx_spim_xfer_desc_t xfer = {
+        .p_tx_buffer = (uint8_t *)tx_buf,
+        .tx_length = tx_buf ? len : 0,
+        .p_rx_buffer = rx_buf,
+        .rx_length = rx_buf ? len : 0,
+    };
+
+    /* Execute transfer (blocking) */
+    spi_a_begin_transfer(SPI_A_OWNER_WIFI_SD, &esp_cs_gpio);
+    nrfx_err_t status = nrfx_spim_xfer(&spi_a_inst, &xfer, 0);
+    if(!handshake_done){
+        LOG_INF("SPI master transceive initiated, waiting for handshake to complete...");
+        LOG_INF("SPI master transceive initiated, sent: 0x%02X 0x%02X 0x%02X 0x%02X", 
+            tx_buf[0], tx_buf[1], tx_buf[2], tx_buf[3]);
+    }
+    if (status != NRFX_SUCCESS) {
+        LOG_INF("SPI master transfer failed: %d", status);
+        k_mutex_unlock(&spi_a_mutex);
+        return -EIO;
+    }
+    else{
+        LOG_DBG("SPI master transfer initiated, waiting for completion...");
+    }
+
+    // Note: 1msec works for ExG packets, but not for US
+    // 811 bytes = 6488 bits, at 4 Mbps takes approx 1.6 msec
+    if(!handshake_done){
+        status = k_sem_take(&spi_nrf_esp_transfer_done, K_MSEC(5000));
+    }
+    else{
+        // smaller timeout for regular packets after handshake is done
+        status = k_sem_take(&spi_nrf_esp_transfer_done, K_MSEC(2));
+    }
+    if (status != 0) {
+        LOG_INF("SPI master transfer timed out: %d", status);
+        k_mutex_unlock(&spi_a_mutex);
+        return -ETIMEDOUT;
+    }
+
+    if(!handshake_done){
+        LOG_INF("SPI handshake transfer complete, received: 0x%02X 0x%02X 0x%02X 0x%02X",
+                rx_buf[0], rx_buf[1], rx_buf[2], rx_buf[3]);
+    }
+
+    k_mutex_unlock(&spi_a_mutex);
+    return 0;
+}
+
+
+int biogap_to_esp_transaction(esp_packet_t *packet){
+
+    /* NRF53 as SPI master sends packet to ESP32 slave */
+    //LOG_INF("Starting SPI transaction..."); 
+    
+    if (packet->size == 0) {
+        LOG_WRN("Empty packet, nothing to send");
+        return -EINVAL;
+    }
+
+    /* Determine actual send length: if producer left size as max, try to find tailer marker to avoid sending garbage */
+    size_t send_len = packet->size;
+    // for (size_t i = 0; i < packet->size; i++) {
+    //     if (packet->data[i] == ESP_SPI_TAILER) {
+    //         send_len = i + 1;
+    //         break;
+    //     }
+    // }
+
+    uint8_t spi_rx_buf[send_len];
+    memset(spi_rx_buf, 0, send_len);
+
+    //LOG_INF("Sending packet with header 0x%02X, tailer (at) %zu, counter %d, send_len=%zu",
+    //        packet->data[0], send_len - 1, (packet->data[1] | packet->data[2] << 8), send_len);
+
+    int ret = spi_master_transceive(packet->data, spi_rx_buf, send_len);
+    //drdy_pin_set(1);
+
+    if(ret != 0){
+            LOG_ERR("SPI transaction failed (ret=%d)", ret);
+            LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
+            while (1) {k_sleep(K_FOREVER);}
+            return ret;
+    }
+
+        // check if expected received header and tailer are correct
+    if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
+            LOG_ERR("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
+                spi_rx_buf[0], ESP_SPI_HEADER, spi_rx_buf[send_len - 1], ESP_SPI_TAILER);
+            LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
+            while (1) {k_sleep(K_FOREVER);}
+            return -EIO;   
+    }
+
+    //check if the received data contain an implicit stop command from ESP
+    if(spi_rx_buf[2] == ESP_STOP_COMMAND){
+        LOG_INF("Received ESP STOP command, resetting NRF-ESP communication state and waiting for stop sensor command");
+        // reset state to idle to block sending data to ESP
+        nrf_esp_comm_state = NRF_ESP_IDLE; 
+        // stop command is enqueued in the 3rd byte
+        handle_connectivity_command(&spi_rx_buf[3], 1);
+    }
+
+
+    return 0;
+}
+
+

@@ -117,6 +117,27 @@ config PPG_SAMPLE_RATE
 
 endif # SENSOR_PPG_NEW
 
+config WI_FI
+	bool "WiFi/SD shield (ESP32-C6) as the streaming transport"
+	default n
+	help
+	  Enables the WiFi/SD shield as an alternative to BLE for streaming
+	  sensor data: the nRF5340 acts as SPI master to an ESP32-C6 SPI
+	  slave, plus a transport-agnostic command dispatcher
+	  (core/command_dispatcher.c) that both this and the BLE path route
+	  commands through. Shares SPI_A (SPIM4) with the ADS1298 -- each
+	  device on the bus gets its own software-toggled CS GPIO (see
+	  spi/spi_a.h and wifi_sd_shield/wifi_sd_shield_inits.c).
+
+config DUMMY_SENSOR
+	bool "Dummy sensor (synthetic ExG-shaped data, no hardware required)"
+	default n
+	help
+	  Generates synthetic ExG-shaped packets on a timer and sends them
+	  through the same path a real sensor would (BLE, or the ESP32 WiFi
+	  shield when CONFIG_WI_FI is also enabled). Useful for exercising the
+	  streaming pipeline without an ADS1298/ExG shield attached.
+
 config PMIC_NOISE_TEST
 	bool "PMIC noise-injection test (diagnostic build)"
 	default n

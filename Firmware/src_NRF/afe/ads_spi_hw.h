@@ -32,16 +32,11 @@
 #include <zephyr/drivers/gpio.h>
 #include <nrfx_spim.h>
 #include "afe/ads_defs.h"
+#include "spi/spi_a.h"
 
 /*==============================================================================
  * External Hardware Resources
  *============================================================================*/
-
-/** @brief SPI bus mutex */
-extern struct k_mutex spi_mutex;
-
-/** @brief SPIM driver instance */
-extern nrfx_spim_t spim_inst;
 
 /** @brief ADS1298_A chip select GPIO spec */
 extern const struct gpio_dt_spec gpio_dt_ads1298_a_cs;
@@ -57,5 +52,14 @@ extern uint8_t pr_word[10];
 
 /** @brief ADS1298 initialization status flag */
 extern bool ads_initialized;
+
+/**
+ * @brief SPI_A completion handler for ADS1298 transfers
+ *
+ * Called by the shared spi/spi_a.c interrupt dispatcher when the in-flight
+ * transfer's owner is SPI_A_OWNER_ADS. Deasserts both ADS1298 CS lines and
+ * runs the read/write completion logic (see ads_spi_data.c).
+ */
+void ads_spim_transfer_complete(void);
 
 #endif // ADS_SPI_HW_H

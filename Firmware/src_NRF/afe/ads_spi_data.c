@@ -44,6 +44,9 @@
 #include "afe/ads_spi_data.h"
 #include "ble/ble_appl.h"
 #include "ads_spi_comm.h"
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
 
 /* Inter-board synchronization */
 #include "core/board_sync.h"
@@ -214,7 +217,11 @@ void ads_spim_handler_done(void) {
         // BLE PCK tail
         ble_tx_buf[buf_current_size++] = BLE_PCK_TAILER;
 
+#if defined(CONFIG_WI_FI)
+        add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
+#else
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
+#endif
       }
     }
 

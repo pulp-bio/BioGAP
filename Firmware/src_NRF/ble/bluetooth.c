@@ -556,5 +556,7 @@ bool ble_is_connected(void) {
  * Thread Definition
  *============================================================================*/
 
+#ifndef CONFIG_WI_FI
 K_THREAD_DEFINE(ble_write_thread_id, CONFIG_BT_NUS_THREAD_STACK_SIZE, ble_write_thread, NULL, NULL, NULL,
                 PRIORITY_BLE_THREAD, 0, 0);
+#endif
