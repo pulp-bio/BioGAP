@@ -116,7 +116,7 @@ int pwr_bsp_init() {
    * converters share one inductor; with fast edges + high peak current the
    * 5 V boost (VD0) running from battery desenses the BLE radio RX.
    * Applied by max77654_init() right after this function returns. */
-  pmic_h.conf.sbb_drive_speed = MAX77654_SBB_DRIVE_SLOWEST;
+  pmic_h.conf.sbb_drive_speed = MAX77654_SBB_DRIVE_FASTEST;
 
   // Configure soft reset button
   if (!device_is_ready(soft_rst_int_gpio.port)) {
@@ -182,7 +182,7 @@ int wulpus_power_on(void) {
 
     // VD2 set to 3.3V (digital supply, light load - low peak current)
     pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
     pmic_conf->sbb_conf[2].active_discharge = false;
     pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
@@ -197,7 +197,7 @@ int wulpus_power_on(void) {
     // bursts mean less battery/VSYS ripple and less radio desense on
     // battery power. If VD0 sags during ultrasound TX bursts, step up to 0A75.
     pmic_conf->sbb_conf[0].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
     pmic_conf->sbb_conf[0].active_discharge = false;
     pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[0].output_voltage_mV = 5000;

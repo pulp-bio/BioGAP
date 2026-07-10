@@ -103,7 +103,7 @@ int power_ads_on_bipolar(void) {
     pmic_conf->ldo_conf[1].output_voltage_mV = 1500;
 
     pmic_conf->sbb_conf[1].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_0A5;
+    pmic_conf->sbb_conf[1].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
     pmic_conf->sbb_conf[1].active_discharge = true;
     pmic_conf->sbb_conf[1].en = MAX77654_REG_OFF;
     pmic_conf->sbb_conf[1].output_voltage_mV = 1800;

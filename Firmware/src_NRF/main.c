@@ -47,6 +47,7 @@
 #include "pwr/pwr_common.h"
 #include "max77654.h"
 
+#include "afe/ads_appl.h"
 #include "afe/ads_spi.h"
 #include "ble/ble_appl.h"
 #include "core/common.h"
@@ -84,6 +85,15 @@ void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
   }
 }
 
+/* ExG acquisition is disturbed by I2C READ transactions from the PMIC
+ * (measured with the CONFIG_PMIC_NOISE_TEST sweep: reads inject noise
+ * bursts into EEG/EMG - the PMIC sinks the SDA pull-up current through its
+ * die ground - while writes and AMUX/SAADC measurements are clean). While
+ * the ADS streams, the power thread therefore runs read-free quiet cycles:
+ * battery voltage/SoC/currents stay live, status flags and charger
+ * operations are frozen until the stream stops. */
+static bool pmic_measurements_allowed(void) { return ads_get_function() != ADS_READ; }
+
 int main(void) {
   int ret = 0;
 
@@ -118,6 +128,7 @@ int main(void) {
    * (CONFIG_PWR_LONG_PRESS_KILL=0); both set in CMakeLists.txt. Started
    * after pwr_charge_enable() so the periodic charger re-config re-applies
    * the final charger settings. */
+  pwr_set_measurement_gate(pmic_measurements_allowed);
   if (pwr_start()) {
     LOG_ERR("PWR Start failed!");
   }

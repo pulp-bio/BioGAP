@@ -78,6 +78,13 @@ if(CONFIG_SENSOR_WULPUS)
     )
 endif()
 
+# Diagnostic: PMIC-noise injection sweep (see bsp/pmic_noise_test.c)
+if(CONFIG_PMIC_NOISE_TEST)
+    target_sources(app PRIVATE
+        bsp/pmic_noise_test.c
+    )
+endif()
+
 # Multi-PPG sensor subsystem (MAXM86161 × N via TCA9548A)
 if(CONFIG_SENSOR_PPG_NEW)
     target_sources(app PRIVATE

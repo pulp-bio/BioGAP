@@ -471,9 +471,17 @@ once the charger signals charging done. The charging flag is the
 charger state machine's "actively charging" bit — it is 0 when a charger is
 attached but charging has completed. If **no battery is attached** (the BATT
 pin is driven by the charger/VSYS and reads > 4.3 V — impossible for a real
-LiPo), voltage and state of charge are reported as **0**. Temperature is the
-IMU die temperature (cached for 2 s; only meaningful while the IMU is
-powered).
+LiPo), voltage and state of charge are reported as **0**. During ExG
+(EEG/EMG) streaming the power thread runs **read-free quiet cycles**: a
+noise-injection sweep showed that I2C *reads* from the PMIC inject bursts
+into the ExG signals (the PMIC sinks the SDA pull-up current through its die
+ground), while I2C *writes* and AMUX/SAADC measurements are clean. Battery
+voltage, SoC, currents and power therefore stay **live** during a recording;
+only the charging/USB flags and charger operations are frozen at their
+pre-stream state. Exception: while charging, or after a USB plug/unplug
+event mid-stream, all values hold until the stream stops (refresh within one
+cycle, ≤ 20 s). Temperature is the IMU die temperature (cached for 2 s; only
+meaningful while the IMU is powered).
 
 ### Battery / status — response to command 17 (7 bytes, legacy)
 

@@ -117,6 +117,21 @@ config PPG_SAMPLE_RATE
 
 endif # SENSOR_PPG_NEW
 
+config PMIC_NOISE_TEST
+	bool "PMIC noise-injection test (diagnostic build)"
+	default n
+	help
+	  Diagnostic build to locate which PMIC activity injects noise into the
+	  ExG signal path. While ExG streams (production PMIC telemetry is
+	  gated off then), a test thread runs a fixed schedule of isolated PMIC
+	  activities - I2C-only, AMUX-only, SAADC-only, full measurements,
+	  IMON discharge monitor, charger pause - in 30 s phases with one
+	  action every 3 s, logging each step with the time since stream start.
+	  Correlate noise bursts in the recording (packet timestamps share the
+	  same clock) or the console log with the schedule printed in
+	  bsp/pmic_noise_test.c to identify the culprit.
+	  Do not enable in production builds.
+
 menu "State Machine Configuration"
 
 config STATE_MACHINE_USE_CPU_IDLE
