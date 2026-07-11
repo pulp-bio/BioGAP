@@ -79,8 +79,14 @@
  * chunk 2 during ultrasound streaming. */
 #define REQUEST_SYSTEM_STATUS 43
 
-#define START_DUMMY_STREAMING 249
-#define STOP_DUMMY_STREAMING 250
-#define ESP_STOP_COMMAND 251
+/* Deliberately NOT 250/251 (0xFA/0xFB): sensors/wulpus/wulpus_appl.c treats
+ * those as protocol-internal "new config"/"restart" markers embedded in raw
+ * MSP430 config bytes forwarded through the same dispatcher (see the
+ * default: case in command_dispatcher.c) -- a WULPUS config fragment
+ * legitimately starting with 250 or 251 would otherwise be intercepted here
+ * as one of these commands instead of reaching wulpus_set_msp_config(). */
+#define START_DUMMY_STREAMING 243
+#define STOP_DUMMY_STREAMING 244
+#define ESP_STOP_COMMAND 245
 
 #endif // CONNECTIVITY_COMMANDS_H
