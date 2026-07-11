@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "wifi_sd_shield_v0_ap",
-    "project_version":    "ace9faa-dirty",
+    "project_version":    "cc5c34a-dirty",
     "project_path":       "C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V1/Firmware/espc6",
     "idf_path":           "C:/Users/giusy/esp/v5.3.1/esp-idf",
     "build_dir":          "C:/Users/giusy/BIOGAP/BioGAP/WiFi_SD_Shield_V1/Firmware/espc6/build",

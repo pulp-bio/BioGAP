@@ -68,9 +68,13 @@
 #define SET_DEVICE_SETTINGS 12
 #define START_EMG_STREAMING 37
 #define STOP_EMG_STREAMING 38
-#define START_DUMMY_STREAMING 249
-#define STOP_DUMMY_STREAMING 250
-#define ESP_STOP_COMMAND 251
+/* Deliberately NOT 250/251 (0xFA/0xFB): the nRF firmware's WULPUS driver
+ * treats those as protocol-internal "new config"/"restart" markers embedded
+ * in raw MSP430 config bytes forwarded through its command dispatcher --
+ * must stay in sync with Firmware/src_NRF/core/connectivity_commands.h. */
+#define START_DUMMY_STREAMING 243
+#define STOP_DUMMY_STREAMING 244
+#define ESP_STOP_COMMAND 245
 
 #endif // CONNECTIVITY_COMMANDS_H
 
