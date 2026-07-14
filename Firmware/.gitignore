@@ -39,3 +39,7 @@ src_GAP/*.png
 src_GAP/*.ppm
 
 serial_log.log
+
+
+// ignore claude
+*.claude
