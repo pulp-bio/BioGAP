@@ -25,6 +25,17 @@ void app_main()
     esp_err_t ret= 0;
     /* Initializations*/
 
+    // Initialize the debugging GPIO 
+    gpio_config_t io_conf = {0};
+    io_conf.pin_bit_mask = (1ULL << RTC_SCL);
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;            // Enable pull-up resistor (in any case this GPIO should pulled up hihg)
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    gpio_config(&io_conf);
+
+    // set the RTC_SCL pin HIGH to enable debugging for now
+    gpio_set_level(RTC_SCL, 1);
+
     // Logging policy controlled by compile-time user flag in common.h.
     #if ESP_ENABLE_INFO_LOGS
         esp_log_level_set("*", ESP_LOG_INFO);
@@ -34,32 +45,19 @@ void app_main()
     #endif
 
     ESP_LOGI(MAIN_TAG, "Starting app_main, initializing system...");
-
-
-   
     // Initialize Event Group and clear all bits
-    
-    
     g_evt = xEventGroupCreate();
     xEventGroupClearBits(g_evt, B_WIFI_CONNECTED | B_BIOGAP_CONECTED | B_START_CMD_RCV | B_START_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED | B_STOP_CMD_FWD_TO_BIOGAP | B_WRITING_TO_SD);
+    
+    
     spi_bus_mutex = xSemaphoreCreateMutex();
     if (spi_bus_mutex == NULL) {
         ESP_LOGE(MAIN_TAG, "Failed to create SPI bus mutex");
         abort();
     }
-
-    /*
-    //Initialize WiFi 
-    if (wifi_init_softap() != ESP_OK) {
-        ESP_LOGE(MAIN_TAG, "Failed to initialize WiFi");
-        abort();
-    }
-    
-    */
-    xEventGroupSetBits(g_evt, B_WIFI_CONNECTED);
-
-    #if defined IS_ESP_SPI_MASTER
-        ESP_LOGI(MAIN_TAG, "ESP is configured as SPI MASTER");
+    // SPI Handshake with NRF
+    #if defined IS_ESP_SPI_SLAVE
+        ESP_LOGI(MAIN_TAG, "ESP is configured as SPI SLAVE");
         // Initialize the necessary GPIOs
         config_spi_nrf_master_esp_slave_pins(); 
         ESP_LOGI(MAIN_TAG, "NRF-ESP GPIO pins configured successfully");
@@ -68,8 +66,10 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "NRF-ESP SPI bus initialized successfully");
     #endif
 
+
     // Execute Initial Handshake with NRF master to set up the device before starting main tasks
-    while(xEventGroupGetBits(g_evt) & B_WIFI_CONNECTED){
+    //while(xEventGroupGetBits(g_evt) & B_WIFI_CONNECTED){
+    while(1){
         ret = initial_handshake_nrf_master_esp_slave_pq(); 
         if (ret == ESP_OK) {
             ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
@@ -79,11 +79,18 @@ void app_main()
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
+
+    // Wi-Fi Initialization 
+    ESP_LOGI(MAIN_TAG, "Before init Wifi free heap: %d, free DMA: %d", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_DMA));
+    //Initialize WiFi 
+    if (wifi_init_softap() != ESP_OK) {
+        ESP_LOGE(MAIN_TAG, "Failed to initialize WiFi");
+        abort();
+    }
+    ESP_LOGI(MAIN_TAG, "After init Wifi free heap: %d, free DMA: %d", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_DMA));
     
-
-    // Comment the rest for now, testing only handshake (dev)
-
-    /*
+    xEventGroupSetBits(g_evt, B_WIFI_CONNECTED);
+    
     // Create the RingBuffer to allocate incoming data. For now, assuming point-to-point communication (no networking)
     biogap_ringbuf = xRingbufferCreate(RINGBUFF_SIZE, RINGBUF_TYPE_NOSPLIT);
     if (biogap_ringbuf == NULL){
@@ -93,18 +100,18 @@ void app_main()
     ESP_LOGI(MAIN_TAG, "BIOGAP Ringbuffer created with size %d bytes", RINGBUFF_SIZE);
 
 
-    // Bind first to the GUI (commented for now)
-    // ret = bind_to_gui(); 
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(MAIN_TAG, "Failed to bind to GUI");
-    //     abort();
-    // }
+    // Bind first to GUI 
+    ret = bind_to_gui(); 
+    if (ret != ESP_OK) {
+        ESP_LOGE(MAIN_TAG, "Failed to bind to GUI");
+        abort();
+    }
 
     xEventGroupSetBits(g_evt, B_GUI_SOCKET_BIND);
     node_state = STATE_IDLE;
     ESP_LOGI(MAIN_TAG, "WiFi initialized and bound to GUI successfully");
     // ========================== START ALL THE TASKS =============================
-
+    
     BaseType_t xr = xTaskCreate(read_from_biogap_task_nrf_master_esp_slave_prequeue, "read_biogap_task_nrf_master", 4096, NULL, 1, &read_from_biogap_task_nrf_master_pq_esp_slave_handle);
     if (xr != pdPASS) {
         ESP_LOGE(MAIN_TAG, "Failed to create read_from_biogap task (err=%d)", xr);
@@ -151,7 +158,7 @@ void app_main()
             ESP_LOGI(MAIN_TAG, "Created sd_card_task");
         }
     #endif
-    */
+
     // Main Thread can now sleep and let the tasks do the work. 
     start_time = esp_timer_get_time();
     while(1) {

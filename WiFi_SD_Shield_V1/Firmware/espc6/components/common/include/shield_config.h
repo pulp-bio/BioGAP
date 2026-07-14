@@ -7,7 +7,7 @@
 
 
 // ---------------------- SELECT IF ESP is SPI MASTER OR SLAVE ---------------------
-#define IS_ESP_SPI_MASTER  1
+#define IS_ESP_SPI_SLAVE  1
 
 // ----------------------- ESP direct write to SD card -----------------------
 #define ESP_ENABLE_SD_WRITE          0

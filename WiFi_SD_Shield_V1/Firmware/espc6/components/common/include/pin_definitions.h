@@ -17,6 +17,14 @@
 #define ESP_SD_MISO  2                                 // ESP MISO: received data from SD Card | SD CARD: mSD_DAT0 -> DAT0
 #define ESP_SD_CLK   6                                // ESP CLK: clock singal | SD CARD: mSD_CLK -> CLK
 #define ESP_SD_CS    18                                // ESP CS: chip select signal | SD CARD mSD_DAT3 -> CS (in spi mode)  
+#define ESP_SDCTRL      9                              // To control if the ESP writes directly to SD card. 
 
+// -------------------- RTC PINS  ------------------------
+#define RTC_SCL 15
+#define RTC_SDA 14
+#define RTC_ON  13                                  // GPIO pin for enabling/disabling the RTC
+#define RTC_FOUT    4
+#define RTC_CLKOUT 3
 
+#
 #endif // PIN_DEFINITIONS_H

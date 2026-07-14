@@ -30,23 +30,34 @@ esp_err_t wifi_init_softap(void)
         return ret;
     }
 
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "Nvs OKAY"); 
+
     ret = esp_netif_init();
     if (ret != ESP_OK) {
         return ret;
     }
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_netif_init OKAY"); 
 
     ret = esp_event_loop_create_default();
     if (ret != ESP_OK) {
         return ret;
     }
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_event_loop_create_default OKAY");
 
     esp_netif_create_default_wifi_ap();
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_netif_create_default_wifi_ap OKAY");
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ret = esp_wifi_init(&cfg);
     if (ret != ESP_OK) {
         return ret;
     }
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_wifi_init OKAY");
 
     ret = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_station_event_handler, NULL, NULL);
     if (ret != ESP_OK) {
@@ -79,16 +90,21 @@ esp_err_t wifi_init_softap(void)
     if (ret != ESP_OK) {
         return ret;
     }
-
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_wifi_set_mode(WIFI_MODE_AP); OKAY");
     ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
     if (ret != ESP_OK) {
         return ret;
     }
-
+    //vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "esp_wifi_set_config(WIFI_IF_AP, &wifi_config); OKAY");
+    gpio_set_level(RTC_SCL, 0);
     ret = esp_wifi_start();
     if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
         return ret;
     }
+    gpio_set_level(RTC_SCL, 1);
     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d", EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS, (int)EXAMPLE_ESP_WIFI_CHANNEL);
     return ESP_OK;
 }
