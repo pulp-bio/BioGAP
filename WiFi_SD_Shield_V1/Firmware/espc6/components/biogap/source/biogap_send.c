@@ -1,6 +1,7 @@
 
 #include "biogap.h"
 #include "common.h"
+#include "gui_task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/spi_slave.h"
@@ -52,8 +53,17 @@ static esp_err_t send_command_to_biogap_master(uint8_t command)
         sendbuf_persistent[0] = ESP_EXG_HEADER; 
         sendbuf_persistent[1] = command;               // to signal the command to the master
         sendbuf_persistent[2] = 0x00;                     // nothing
-        sendbuf_persistent[3] = ESP_EXG_TAILER;
+        sendbuf_persistent[NRF_EXG_PACKET_SIZE - 1] = ESP_EXG_TAILER;
     }
+
+
+    // last working
+    for (int i = 0; i < QUEUE_COUNT; i++) {
+        if (tx_bufs[i]) {
+            memcpy(tx_bufs[i], sendbuf_persistent, NRF_EXG_PACKET_SIZE);
+        }
+    }
+
 
     spi_slave_transaction_t *ret_trans;
     esp_err_t ret;
@@ -75,8 +85,8 @@ static esp_err_t send_command_to_biogap_master(uint8_t command)
 
     /* Validate packet markers (header + tailer) */
 
-    ESP_LOGI(BIOGAP_SEND_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
-             tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
+    ESP_LOGI(BIOGAP_SEND_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [last]=0x%02X)",
+             tx_data[0], tx_data[1], tx_data[2], tx_data[NRF_EXG_PACKET_SIZE - 1]);
     return ESP_OK;
 
 }
@@ -85,7 +95,7 @@ static esp_err_t send_first_start_command_to_biogap_master(uint8_t command)
     esp_err_t ret;
 
     tx_to_biogap_buf[0] = ESP_SPI_HEADER;
-    tx_to_biogap_buf[1] = command;                   // will be replaced by what is received from BIOGUI 
+    tx_to_biogap_buf[1] = command;                   
     tx_to_biogap_buf[2] = 0x00;                     // nothing
     tx_to_biogap_buf[3] = ESP_SPI_TAILER;
     rx_from_biogap_buf[0] = 0x00;
@@ -127,8 +137,6 @@ esp_err_t propagate_first_start_command_to_biogap_master(uint8_t command)
     if (ret != ESP_OK) {
         return ret;
     }
-    // add a small debouncing delay
-    //vTaskDelay(pdMS_TO_TICKS(1));
     return send_first_start_command_to_biogap_master(command);
 }
 
@@ -185,25 +193,44 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
                                portMAX_DELAY);
 
         if ((bits & B_START_CMD_RCV) && !(xEventGroupGetBits(g_evt) & B_START_CMD_FWD_TO_BIOGAP)) {
+            
             uint8_t start_command = rx_gui_data_to_fwd[0]; 
-            if (first_time){
-                first_time = false;
-                ret = propagate_first_start_command_to_biogap_master(start_command);
-            }
-            else{
-                //propagate_command_to_biogap_master(start_command);
-                propagate_first_start_command_to_biogap_master(start_command);
+            ESP_LOGI(BIOGAP_SEND_TAG, "Received command from GUI, propagating to BIOGAP master start_command=%d", (unsigned)start_command);
+            // if (first_time){
+            //     first_time = false;
+            //     ret = propagate_first_start_command_to_biogap_master(start_command);
+            // }
+            // else{
+            //     // we are already armed for full lenght transaction
+            //     ret = propagate_command_to_biogap_master(start_command);
+            //     //}
+            // }
 
-            }
-                
+            ret = propagate_first_start_command_to_biogap_master(start_command);
             if (ret == ESP_OK) {
-                send_start_command_to_biogap_master = true;
-                xEventGroupSetBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
-                xEventGroupClearBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
-                xEventGroupClearBits(g_evt, B_START_CMD_RCV);
-                node_state = STATE_STREAMING;
-                ESP_LOGI(BIOGAP_SEND_TAG, "Start command propagated to BIOGAP master successfully");
-            } 
+                /* Only now -- control frame confirmed delivered -- allocate the
+                 * 211-byte DMA buffers for the upcoming streaming session.
+                 * reset_spi_bus_for_restart() frees these after STOP but no
+                 * longer reallocates them, so without this call they'd stay
+                 * NULL and the read task's prequeue_transactions() would
+                 * memcpy/queue against null pointers on every START after the
+                 * first. Safe to call unconditionally (including the very
+                 * first START): it no-ops around already-allocated buffers
+                 * instead of leaking. */
+                esp_err_t alloc_ret = allocate_prequeue_resources();
+                if (alloc_ret != ESP_OK) {
+                    ESP_LOGE(BIOGAP_SEND_TAG, "Failed to allocate pre-queue resources after START, will retry: %s", esp_err_to_name(alloc_ret));
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    xEventGroupSetBits(g_evt, B_START_CMD_RCV);
+                } else {
+                    send_start_command_to_biogap_master = true;
+                    xEventGroupSetBits(g_evt, B_START_CMD_FWD_TO_BIOGAP);
+                    xEventGroupClearBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
+                    xEventGroupClearBits(g_evt, B_START_CMD_RCV);
+                    node_state = STATE_STREAMING;
+                    ESP_LOGI(BIOGAP_SEND_TAG, "Start command propagated to BIOGAP master successfully");
+                }
+            }
             else {
                 ESP_LOGE(BIOGAP_SEND_TAG, "Failed to propagate start command to BIOGAP master, will retry: %s", esp_err_to_name(ret));
                 vTaskDelay(pdMS_TO_TICKS(10));
@@ -211,16 +238,11 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
             }
         }
 
-        if ((bits & B_SPI_QUIESCED) && !(xEventGroupGetBits(g_evt) & B_STOP_CMD_FWD_TO_BIOGAP)) {
-            ESP_LOGI(BIOGAP_SEND_TAG, "Received stop command from GUI, forwarding STOP command to BIOGAP master");
-            node_state = STATE_IDLE;
-            xEventGroupSetBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
-            xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI);
-            xEventGroupClearBits(g_evt, B_SPI_QUIESCED);
-            xEventGroupClearBits(g_evt, B_START_CMD_RCV);
-           
-            ESP_LOGI(BIOGAP_SEND_TAG, "Stop command propagated to BIOGAP master successfully");
-        }
+        /* B_SPI_QUIESCED is included in the wait mask below only so this task
+         * wakes up (nothing to do here on it): enter_stop_quiesce_state()
+         * (biogap_read.c) now handles the entire STOP sequence itself --
+         * confirming delivery, setting node_state/event bits, and calling
+         * prepare_for_restart() -- directly in the read task. */
 
         if (bits & B_RINGBUFFER_FULL) {
             ESP_LOGW(BIOGAP_SEND_TAG, "Ringbuffer backpressure signaled");

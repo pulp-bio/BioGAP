@@ -11,7 +11,7 @@ static uint8_t expected_pq_handshake_buffer[4] __attribute__((aligned(4)));
 // HELPER: Initial handshake
 // =============================================================================
 
-esp_err_t initial_handshake_nrf_master_esp_slave_pq(void)
+int initial_handshake_nrf_master_esp_slave_pq(void)
 {
     ESP_LOGW(TAG, ">>> HANDSHAKE: Waiting for NRF master to pull CS and clock 4 bytes (marker=0x%02X)", HANDSHAKE_MARKER);
     
@@ -41,7 +41,7 @@ esp_err_t initial_handshake_nrf_master_esp_slave_pq(void)
     
     if (!SPI_BUS_LOCK(portMAX_DELAY)) {
         ESP_LOGE(TAG, "Failed to lock SPI bus mutex for handshake");
-        return ESP_FAIL;
+        return -1;
     }
 
     esp_err_t ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
@@ -54,7 +54,7 @@ esp_err_t initial_handshake_nrf_master_esp_slave_pq(void)
                 handshake_pq_rx_buffer[0], handshake_pq_rx_buffer[1], handshake_pq_rx_buffer[2], handshake_pq_rx_buffer[3]);
     } else {
         ESP_LOGE(TAG, "SPI xact failed: %s", esp_err_to_name(ret));
-        return ret;
+        return -1;
     }
     
     /* Validate handshake response */
@@ -65,6 +65,7 @@ esp_err_t initial_handshake_nrf_master_esp_slave_pq(void)
         handshake_pq_done = true;
     } else {
         ESP_LOGW(TAG, "Handshake warning: received response does not match expected marker");
+        return -1;
     }
-    return ESP_OK;
+    return 0;
 }

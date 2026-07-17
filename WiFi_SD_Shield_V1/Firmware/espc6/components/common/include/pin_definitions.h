@@ -2,11 +2,14 @@
 #define PIN_DEFINITIONS_H
 
 // -------------------- NRF <-> ESP SPI pins. Condition: NRF is SPI Master, ESP is SPI slave --------------------
-#define NRF_ESP_DRDY_DIR_CTRL        12      // TO determine if NRF or ESP is the SPI master. LOW if NRF is master, HIGH if ESP is master.
+
 #define NRF_ESP_MOSI            23      // NRF_ESP MOSI  -> SPI_NRF_MOSI --> SPI_A_MOSI
 #define NRF_ESP_MISO            19      // NRF_ESP MISO  --> SPI_NRF_MISO --> SPI_A_MISO
 #define NRF_ESP_SCLK            20      // NRF_ESP SCLK  -> SPI_NRF_CLK --> SPI_A_CLK
 #define NRF_ESP_CS              21      // NRF_ESP_CS    -> NRF_QSPI_IO1
+#define NRF_ESP_DIR_CTRL        12      // TO determine if NRF or ESP is the SPI master. LOW if NRF is master, HIGH if ESP is master.
+
+#define NRF_ESP_DRDY_DIR_CTRL   8
 #define NRF_ESP_DATA_READY      22      // NRF_ESP_DRDY  -> NRF_QSPI_IO2
 
 

@@ -59,6 +59,18 @@
 #define HANDSHAKE_RETRY_DELAY_MS 20
 #define HANDSHAKE_MAX_RETRIES 50
 
+/* STOP is delivered to the NRF only by piggybacking on the response of the
+ * NEXT regular data transaction the NRF (master) happens to initiate on its
+ * own sampling cadence -- there is no dedicated STOP transfer. That cadence
+ * can be as slow as ~400ms (dummy sensor: 100ms sample period x 4 samples per
+ * packet), so this must poll/retry for long enough to actually observe that
+ * delivery before the caller tears down and reinitializes the SPI slave bus
+ * (prepare_for_restart()) -- otherwise the bus gets reset before the NRF ever
+ * saw the STOP marker, and the NRF is left stuck trying to stream to a bus
+ * that no longer has anything queued for it. */
+#define STOP_DRAIN_TIMEOUT_MS 1500
+#define STOP_DRAIN_POLL_MS 100
+
 
 #define PACKET_SZ NRF_EXG_PACKET_SIZE
 
@@ -71,9 +83,12 @@ _Static_assert(PACKET_SZ <= SPI_FROM_BIOGAP_MAX_SIZE,
 // =============================================================================
 
 /* Persistent DMA buffers and descriptors (pre-allocated once at task start) */
-static uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
-static uint8_t *tx_bufs[QUEUE_COUNT] = {NULL};           /* TX buffers for each pre-queued desc */
-static spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
+// static uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
+// static uint8_t *tx_bufs[QUEUE_COUNT] = {NULL};           /* TX buffers for each pre-queued desc */
+// static spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
+uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
+uint8_t *tx_bufs[QUEUE_COUNT] = {NULL};           /* TX buffers for each pre-queued desc */
+spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
 uint8_t *sendbuf_persistent = NULL;               /* Single TX buffer for all desciptors */
 static bool prequeued = false;
 
@@ -226,9 +241,9 @@ static esp_err_t enter_stop_quiesce_state(void)
 {
     ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
 
-    /* Overwrite the shared streaming TX buffer so the active pre-queued
-     * descriptor returns the STOP command frame during quiesce.
-     */
+    spi_slave_transaction_t *ret_trans;
+    esp_err_t ret;
+
     if (sendbuf_persistent) {
         memset(sendbuf_persistent, 0, PACKET_SZ);
         sendbuf_persistent[0] = ESP_EXG_HEADER;
@@ -243,29 +258,77 @@ static esp_err_t enter_stop_quiesce_state(void)
         }
     }
 
-    spi_slave_transaction_t *ret_trans;
-    esp_err_t ret;
-    uint8_t drained = 0;
 
-    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
-        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex during STOP quiesce");
-        return ESP_FAIL;
-    }
+    bool stop_delivered = false;
+    // int64_t deadline_us = esp_timer_get_time() + (int64_t)STOP_DRAIN_TIMEOUT_MS * 1000;
+    
+    // send stop command multiple times
+    uint8_t send_stop_command_count = 0;
+    bool stop_ack_received = false;
+    //while(send_stop_command_count < 3 && !stop_delivered) {
+    while(stop_ack_received == false) {
+        ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
+        if (ret == ESP_OK) {
+            uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
+            uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
 
-    ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
-    SPI_BUS_UNLOCK();
-    if (ret != ESP_OK) {
-        ESP_LOGI(BIOGAP_READ_TAG, "Failed to drain in-flight transaction during STOP quiesce");
+            ESP_LOGI(BIOGAP_READ_TAG,
+                    "Sent:     [0]=0x%02X [1]=0x%02X [2]=0x%02X [3]=0x%02X",
+                    tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
+
+            ESP_LOGI(BIOGAP_READ_TAG,
+                    "Received: [0]=0x%02X [1]=0x%02X [2]=0x%02X [3]=0x%02X",
+                    rx_data[0], rx_data[1], rx_data[2], rx_data[3]);
+
+            bool stop_ack = (rx_data[0] & NRF_STOP_ACK_MASK) != 0;
+            uint8_t header = rx_data[0] & ~NRF_STOP_ACK_MASK;
+
+            if ((header == ESP_SPI_HEADER) && stop_ack) {
+                ESP_LOGI(BIOGAP_READ_TAG, "STOP ACK received");
+                stop_ack_received = true;
+                send_stop_command_count = 0;
+                // Transition the ESP-side communication state here.
+            } 
+            else {
+                send_stop_command_count++;
+            }
+        }
+        }
+        //SPI_BUS_UNLOCK(); removed
+
+    ESP_LOGI(BIOGAP_READ_TAG, "STOP command delivery confirmed after %d attempts", send_stop_command_count);
+    //EventGroupSetBits(g_evt, B_SPI_QUIESCED);
+    node_state = STATE_IDLE;
+    prequeued = false;
+    xEventGroupSetBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
+    reset_spi_bus_for_restart();
+    prepare_for_restart();
+    return ESP_OK;
+}
+
+/**
+ * @brief Re-arm QUEUE_COUNT idle-content transactions right after the SPI
+ * slave bus is torn down and reinitialized for the next session.
+ *
+ * prepare_for_restart() (gui_task.c) frees/reinitializes the SPI slave bus
+ * after a STOP, but previously left it with nothing queued until the NEXT
+ * START's prequeue_transactions() call -- an unarmed slave for however long
+ * the system then sits idle. If the NRF ever clocks a transaction during
+ * that window (e.g. STOP delivery confirmation timed out and it never got
+ * the memo, or any other stray attempt), it reads back 0xFF/0xFF garbage
+ * instead of a valid header/tailer, which trips its own halt-on-bad-frame
+ * check (wifi_sd_spi_functions.c). Call this immediately after
+ * allocate_prequeue_resources() so the bus is never left unarmed.
+ */
+esp_err_t rearm_idle_prequeue(void)
+{
+    esp_err_t ret = prequeue_transactions();
+    if (ret == ESP_OK) {
+        prequeued = true;
     } else {
-        uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
-        ESP_LOGI(BIOGAP_READ_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [3]=0x%02X)",
-                 tx_data[0], tx_data[1], tx_data[2], tx_data[3]);
+        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-arm idle pre-queue: %s", esp_err_to_name(ret));
     }
-
-        xEventGroupSetBits(g_evt, B_SPI_QUIESCED);
-        node_state = STATE_IDLE;
-        prequeued = false;
-        return ESP_OK;
+    return ret;
 }
 
 // =============================================================================
@@ -299,17 +362,13 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
     bool first_read = true;
     /* === MAIN LOOP === */
     while (1) {
-        /* Wait for SD card writes to complete */
-        if ((xEventGroupGetBits(g_evt) & B_WRITING_TO_SD) != 0) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
+        
         /* === HANDSHAKE PHASE === */
         /* Handshake is executed at startup in main; block here until the connected bit is set */
         xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
         /* Wait until a start command has been forwarded to BIOGAP (sleep until bit set) */
         xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
-
+        //ESP_LOGI(BIOGAP_READ_TAG, "B_START_CMD_FWD_TO_BIOGAP received");
         if(!prequeued){
             ret = prequeue_transactions();
             if (ret != ESP_OK) {
@@ -329,25 +388,23 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
         /* First, check if STOP command has arrived from either the GUI or the overflow/backpressure path. */
         if (xEventGroupGetBits(g_evt) & (B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED)) {
-            //ESP_LOGI(BIOGAP_READ_TAG, "STOP command received, entering quiesce state before processing more transactions");
+
             if(node_state != STATE_IDLE){
                 ret = enter_stop_quiesce_state();
-                // break to give priority to the STOP command processing before we check for new transactions again
                 xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP); 
-                first_read = true;   
+                ESP_LOGI(BIOGAP_READ_TAG, "STOP command processed, returning to idle state"); 
+                first_read = true; 
                 continue;
                   
             }
-            //enter_stop_quiesce_state();
-            /* Block here until a START has been forwarded to BIOGAP */
-            //xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
-            //ESP_LOGI(BIOGAP_READ_TAG, "START command forwarded to BIOGAP after quiesc, resuming streaming");
-            //xEventGroupClearBits(g_evt, B_SPI_QUIESCED);
             continue; // jump to the top of the loop
         }
         else{
 
             if (node_state == STATE_STREAMING){
+                if(first_read == true){
+                    ESP_LOGI(BIOGAP_READ_TAG, "First transaction in progress");
+                }
                 spi_slave_transaction_t *ret_trans = NULL;
                 if (!SPI_BUS_LOCK(portMAX_DELAY)) {
                     ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for transaction receive");
@@ -415,7 +472,13 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                         ESP_LOGI(BIOGAP_READ_TAG, "STOP command already received, not forwarding another STOP to BIOGAP master");
                     }
                     else{
-                        ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg"); 
+                        ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg");
+                        /* Piggybacked STOP frame carries rx_gui_data_to_fwd[0] as its
+                         * opcode byte (see enter_stop_quiesce_state()); without setting
+                         * it here it would still hold whatever command was last
+                         * forwarded (typically the session's START opcode), so the NRF
+                         * would dispatch the wrong command. */
+                        rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
                         xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
                     }
                     continue; // jump to next iteration so the STOP check can run immediately
@@ -427,11 +490,6 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 tx_data[1] = tx_counter & 0xFF;  /* LSB of counter */
                 tx_data[2] = (tx_counter >> 8) & 0xFF;  /* MSB of counter */
 
-                /* === KEY PATTERN: RE-QUEUE IMMEDIATELY ===
-                * This is the core of the high-speed pattern:
-                * Return the descriptor to the queue IMMEDIATELY after processing.
-                * This keeps the slave armed continuously with no gaps.
-                */
                 if (!SPI_BUS_LOCK(portMAX_DELAY)) {
                     ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue");
                     break;

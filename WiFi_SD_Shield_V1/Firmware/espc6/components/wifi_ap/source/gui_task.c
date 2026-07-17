@@ -1,6 +1,7 @@
 #include "gui_task.h"
+#include "dummy_sensor_local.h"
 #include "freertos/ringbuf.h"
-#define GUI_TAG "[gui_task.c]" 
+#define GUI_TAG "[gui_task.c]"
 
 bool gui_connected = false;
 int gui_sock = -1;
@@ -10,30 +11,6 @@ TaskHandle_t rx_gui_task_handle = NULL;
 
 static bool start_reported = false;
 static bool stop_reported = false;
-
-// static esp_timer_handle_t start_sim_timer_handle = NULL;
-// static esp_timer_handle_t stop_sim_timer_handle = NULL;
-
-
-// static void start_sim_timer_callback(void *arg)
-// {
-//     rx_data_from_gui[0] = START_DUMMY_STREAMING;
-//     xEventGroupSetBits(g_evt, B_START_CMD_RCV);
-//     ESP_LOGI(GUI_TAG, "Simulated receiving START command from GUI after 10 seconds");
-//     if (rx_gui_task_handle != NULL) {
-//         xTaskNotifyGive(rx_gui_task_handle);
-//     }
-// }
-
-// static void stop_sim_timer_callback(void *arg)
-// {
-//     rx_data_from_gui[0] = STOP_DUMMY_STREAMING;
-//     xEventGroupSetBits(g_evt, B_STOP_CMD_RPT_PENDING);
-//     if (rx_gui_task_handle != NULL) {
-//         xTaskNotifyGive(rx_gui_task_handle);
-//     }
-//     ESP_LOGI(GUI_TAG, "STOP timer");
-// }
 
 esp_err_t bind_to_gui()
 {
@@ -72,6 +49,11 @@ esp_err_t bind_to_gui()
     }
     ESP_LOGI(GUI_TAG, "Accepted with fd=%d", s);
 
+    /* Only one GUI connection is ever served at a time (accept() above is
+     * blocking, single-shot); the listening socket isn't needed again until
+     * the next call to bind_to_gui(), which creates a fresh one. */
+    close(ls);
+
     /* keepalive */
     int ka = 1, idle = 5, intv = 5, cnt = 3;
     setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, &ka, sizeof(ka));
@@ -97,7 +79,7 @@ esp_err_t bind_to_gui()
     return ESP_OK;
 }
 
-static esp_err_t rb_soft_flush(RingbufHandle_t rb)
+esp_err_t rb_soft_flush(RingbufHandle_t rb)
 {
     if (rb == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -140,143 +122,6 @@ static esp_err_t rb_soft_flush(RingbufHandle_t rb)
     return ESP_OK;
 }
 
-// // for now, just a tmp implementation
-// void rx_from_gui(void *pvParameters)
-// {
-//     bool acquisition_start_and_stop_simulated = false;
-//     // Keeps on listening from the GUI
-//     // If stop command received -> forward stop command to the nodes
-//     // Receive data
-//     rx_gui_task_handle = xTaskGetCurrentTaskHandle();
-//     bool start_reported = false;
-//     bool stop_reported = false;
-    
-//     if (start_sim_timer_handle == NULL) {
-//         esp_timer_create_args_t start_timer_args = {
-//             .callback = start_sim_timer_callback,
-//             .arg = NULL,
-//             .dispatch_method = ESP_TIMER_TASK,
-//             .name = "gui_start_sim",
-//             .skip_unhandled_events = true,
-//         };
-//         if (esp_timer_create(&start_timer_args, &start_sim_timer_handle) != ESP_OK) {
-//             ESP_LOGE(GUI_TAG, "Failed to create start simulator timer");
-//             vTaskDelete(NULL);
-//             return;
-//         }
-//     }
-
-//     if (stop_sim_timer_handle == NULL) {
-//         esp_timer_create_args_t stop_timer_args = {
-//             .callback = stop_sim_timer_callback,
-//             .arg = NULL,
-//             .dispatch_method = ESP_TIMER_TASK,
-//             .name = "gui_stop_sim",
-//             .skip_unhandled_events = true,
-//         };
-//         if (esp_timer_create(&stop_timer_args, &stop_sim_timer_handle) != ESP_OK) {
-//             ESP_LOGE(GUI_TAG, "Failed to create stop simulator timer");
-//             vTaskDelete(NULL);
-//             return;
-//         }
-//     }
-
-//     if (esp_timer_start_once(start_sim_timer_handle, 5 * 1000000LL) != ESP_OK) {
-//         ESP_LOGE(GUI_TAG, "Failed to start start simulator timer");
-//         vTaskDelete(NULL);
-//         return;
-//     }
-
-//     if (esp_timer_start_once(stop_sim_timer_handle,10  * 1000000LL) != ESP_OK) {
-//         ESP_LOGE(GUI_TAG, "Failed to start stop simulator timer");
-//         vTaskDelete(NULL);
-//         return;
-//     }
-
-//     ESP_LOGI(GUI_TAG, "Dummy GUI timers armed: START in 10 s, STOP in 20 s");
-
-//     while (1) {
-//         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-//         if (!start_reported && (xEventGroupGetBits(g_evt) & B_START_CMD_RCV)) {
-//             xEventGroupClearBits(g_evt, B_START_CMD_RCV);
-//             start_reported = true;
-//             stop_reported = false;
-//             ESP_LOGI(GUI_TAG, "Simulated receiving START command from GUI after 10 seconds");
-//         }
-
-//         if (xEventGroupGetBits(g_evt) & B_STOP_CMD_RPT_PENDING) {
-//             ESP_LOGI(GUI_TAG, "Simulated receiving STOP command");
-//             rx_data_from_gui[0] = STOP_DUMMY_STREAMING;         // will be replaced by the actual STOP command later
-//             //sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
-//             xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_GUI);
-//             xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
-//             stop_reported = true;
-//             start_reported = false;
-//             acquisition_start_and_stop_simulated = true;
-//         }
-
-//         // check if we want to do it again
-//         if(acquisition_start_and_stop_simulated){
-//             acquisition_start_and_stop_simulated = false;
-//             // REALLOCATE the resources for the next acquisition since the previous ones were freed during the STOP quiesce
-//             xEventGroupWaitBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
-//             esp_err_t ret = free_prequeue_resources();
-//             // reinitialize completely the SPI slave
-//             ret = spi_slave_free(SPI_HOST_DEVICE);
-//             ESP_LOGI(GUI_TAG, "Freed pre-queue resources after STOP command");
-//             // drain completely the ringbuffer
-//             ret = rb_soft_flush(biogap_ringbuf);
-//             if (ret != ESP_OK) {
-//                 ESP_LOGE(GUI_TAG, "Failed to soft-flush BIOGAP ringbuffer");
-//                 vTaskDelete(NULL);
-//                 return;
-//             }
-//             xEventGroupClearBits(g_evt, B_RINGBUFFER_FULL);
-//             ESP_LOGI(GUI_TAG, "BIOGAP Ringbuffer created with size %d bytes", RINGBUFF_SIZE);
-//             // Set MUX to NRF mode (LOW = 0)
-
-//             //gpio_reset_pin(NRF_SPI_MOSI_GPIO);
-//             //gpio_reset_pin(NRF_SPI_MISO_GPIO);
-//             //gpio_reset_pin(NRF_SPI_SCLK_GPIO);
-//             // Small delay to let signal settle
-//             esp_rom_delay_us(100);
-//             ret = init_nrf_spi_master_esp_slave_bus();
-//             if (ret != ESP_OK) {
-//                 ESP_LOGE(GUI_TAG, "Failed to re-initialize NRF SPI bus"); 
-//                 vTaskDelete(NULL);
-//                 return;
-//             }
-//             ESP_LOGI(GUI_TAG, "Re-initialized NRF SPI bus for next acquisition");
-//             current_spi_mode = SPI_MODE_NRF;
-//             ret = allocate_prequeue_resources();
-//             ESP_LOGI(GUI_TAG, "Re-allocated pre-queue resources for next acquisition");
-//             if (ret != ESP_OK) {
-//                 ESP_LOGE(GUI_TAG, "Failed to allocate pre-queue resources for new acquisition");
-//                 vTaskDelete(NULL);
-//                 return;
-//             }
-//             start_reported = false;
-//             stop_reported = false;
-//             xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI | B_STOP_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RPT_PENDING);
-//             if (esp_timer_start_once(start_sim_timer_handle, 10 * 1000000LL) != ESP_OK) {
-//                 ESP_LOGE(GUI_TAG, "Failed to restart start simulator timer");
-//                 vTaskDelete(NULL);
-//                 return;
-//             }
-
-//             if (esp_timer_start_once(stop_sim_timer_handle, 15 * 1000000LL) != ESP_OK) {
-//                 ESP_LOGE(GUI_TAG, "Failed to restart stop simulator timer");
-//                 vTaskDelete(NULL);
-//                 return;
-//             }
-//             xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
-//             ESP_LOGI(GUI_TAG, "Dummy GUI timers re-armed: START in 10 s, STOP in 20 s");
-//         }
-//     }
-// }
-
-
 
 /** @brief Task to transmit data to the GUI 
  * This task is responsible for draining the content of the ringbuffer and sending it to the GUI via WiFi.
@@ -291,8 +136,8 @@ void tx_to_gui(void *pvParameters)
 
             if(item !=NULL){
                 // send immediately to the gui
-                //int sent = send(gui_sock, item, item_size, 0);
-                int sent = 1; //hardcoded for now
+                int sent = send(gui_sock, item, item_size, 0);
+                // int sent = 1; //hardcoded for now
                 if (sent < 0) {
                     // item will stay in the ringbuffer since we havent' return it yet. 
                     ESP_LOGE(GUI_TAG, "Failed to send data to GUI");
@@ -313,53 +158,90 @@ void tx_to_gui(void *pvParameters)
 }
 
 
-esp_err_t prepare_for_restart(){
-    xEventGroupWaitBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
+/**
+ * @brief Tear down and reinitialize the SPI slave bus and DMA buffers,
+ * guaranteeing an empty transaction queue.
+ *
+ * Only safe to call once the NRF is confirmed (or very likely, see the
+ * timeout fallback in enter_stop_quiesce_state()) idle -- i.e. its sender
+ * thread has seen the STOP marker and won't initiate anything else on the
+ * bus. Two callers:
+ *  - enter_stop_quiesce_state() (biogap_read.c), right after confirming STOP
+ *    delivery via the piggyback mechanism.
+ *  - send_to_biogap_task_nrf_master_esp_slave()'s START handling
+ *    (biogap_send.c), for every START after the first: it clears out
+ *    whatever idle-content descriptors rearm_idle_prequeue() left queued,
+ *    so the dedicated 4-byte control frame sent via DRDY right after is the
+ *    only thing in the SPI slave's FIFO when the NRF's DRDY-triggered dummy
+ *    transceive services it.
+ */
+esp_err_t reset_spi_bus_for_restart(void)
+{
     esp_err_t ret = free_prequeue_resources();
-    // reinitialize completely the SPI slave
     ret = spi_slave_free(SPI_HOST_DEVICE);
-    ESP_LOGI(GUI_TAG, "Freed pre-queue resources after STOP command");
+    ESP_LOGI(GUI_TAG, "Freed pre-queue resources for restart");
+    ret = init_nrf_spi_master_esp_slave_bus();
+    if (ret != ESP_OK) {
+        ESP_LOGE(GUI_TAG, "Failed to re-initialize NRF SPI bus");
+        return ret;
+    }
+    ESP_LOGI(GUI_TAG, "Re-initialized NRF SPI bus for next acquisition");
+    current_spi_mode = SPI_MODE_NRF;
+
+    // commented, first will transmit four bytes 
+    // ret = allocate_prequeue_resources();
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(GUI_TAG, "Failed to allocate pre-queue resources for new acquisition");
+    //     return ret;
+    // }
+    // ESP_LOGI(GUI_TAG, "Re-allocated pre-queue resources for next acquisition");
+    return ESP_OK;
+}
+
+/**
+ * @brief Finish restart bookkeeping after a STOP: flush the ring buffer,
+ * re-arm the SPI bus with idle-content transactions, and clear the
+ * STOP/START event bits.
+ *
+ * Sole caller: enter_stop_quiesce_state() (biogap_read.c), right after
+ * reset_spi_bus_for_restart().
+ */
+esp_err_t prepare_for_restart(){
+    ESP_LOGI(GUI_TAG, "Preparing for restart after STOP command");
     // drain completely the ringbuffer
-    ret = rb_soft_flush(biogap_ringbuf);
+    esp_err_t ret = rb_soft_flush(biogap_ringbuf);
     if (ret != ESP_OK) {
         ESP_LOGE(GUI_TAG, "Failed to soft-flush BIOGAP ringbuffer");
         vTaskDelete(NULL);
         return ret;
     }
     xEventGroupClearBits(g_evt, B_RINGBUFFER_FULL);
-    // Set MUX to NRF mode (LOW = 0)
-    ret = init_nrf_spi_master_esp_slave_bus();
-    if (ret != ESP_OK) {
-        ESP_LOGE(GUI_TAG, "Failed to re-initialize NRF SPI bus"); 
-        vTaskDelete(NULL);
-        return ret;
-    }
-    ESP_LOGI(GUI_TAG, "Re-initialized NRF SPI bus for next acquisition");
-    current_spi_mode = SPI_MODE_NRF;
-    ret = allocate_prequeue_resources();
-    ESP_LOGI(GUI_TAG, "Re-allocated pre-queue resources for next acquisition");
-    if (ret != ESP_OK) {
-        ESP_LOGE(GUI_TAG, "Failed to allocate pre-queue resources for new acquisition");
-        vTaskDelete(NULL);
-        return ret;
-    }
+
+    /* Arm the bus with idle-content transactions right away, instead of
+     * leaving it unarmed until the next START. Otherwise any stray NRF
+     * transaction attempt while idle reads back 0xFF/0xFF (nothing queued)
+     * instead of a valid header/tailer, which trips the NRF's halt-on-bad-
+     * frame check. */
+
+    // COMMENTED 
+    // ret = rearm_idle_prequeue();
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(GUI_TAG, "Failed to re-arm idle pre-queue for new acquisition");
+    //     vTaskDelete(NULL);
+    //     return ret;
+    // }
     start_reported = false;
     stop_reported = false;
-    xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI | B_STOP_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RPT_PENDING);
-    xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
+
+    
+    xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED | B_STOP_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RPT_PENDING);
+
     return ESP_OK;
 }
 
 
 void rx_from_gui(void *pvParameters)
 {
-    // Keeps on listening from the GUI
-    // If a command is received -> parse the command and set the correspoding event bits for the oterh commands. 
-    // Receive data
-
-    // Keeps on listening from the GUI
-    // If stop command received -> forward stop command to the nodes
-    // Receive data
     rx_gui_task_handle = xTaskGetCurrentTaskHandle();
     uint8_t gui_rx_buf[256];
     esp_err_t ret; 
@@ -368,13 +250,47 @@ void rx_from_gui(void *pvParameters)
         int bytes_received = recv(gui_sock, gui_rx_buf, sizeof(gui_rx_buf), 0);
 
         if (bytes_received==0){
-            // This mean the GUI socket has been closed
-            ESP_LOGW(GUI_TAG, "RX with GUI closed");
-            break; // go out 
+            // The GUI closed the connection. This is expected as part of a normal
+            // stop-then-disconnect cycle (and BioGUI may reconnect for the next
+            // session), so don't tear down this task -- go back to waiting for a
+            // new connection instead. If this happens while still streaming, force
+            // a STOP first so the SPI link gets quiesced and the NRF told to stop,
+            // instead of leaving it streaming into a socket nobody is reading.
+            ESP_LOGW(GUI_TAG, "GUI closed the connection (node_state=%d)", (int)node_state);
+
+            if (node_state == STATE_STREAMING) {
+                rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
+                //xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);     --> might be the cause of the race
+            #if ESP_LOCAL_DUMMY_SENSOR
+                /* Local-dummy mode has no equivalent of enter_stop_quiesce_state()
+                 * to trigger this on its own, so it's still called directly here. */
+                prepare_for_restart_local_dummy();
+            #else
+                /* Real path: enter_stop_quiesce_state() (biogap_read.c), running in
+                 * the read task, picks up B_STOP_CMD_RCV_FORCED and calls
+                 * prepare_for_restart() itself once STOP delivery is confirmed.
+                 * Do NOT also call it here -- two tasks racing through
+                 * free/reinit/allocate on the same SPI bus corrupts its state. */
+        #endif
+            }
+            start_reported = false;
+            stop_reported = false;
+
+            close(gui_sock);
+            gui_sock = -1;
+            gui_connected = false;
+            xEventGroupClearBits(g_evt, B_GUI_SOCKET_BIND);
+
+            ESP_LOGI(GUI_TAG, "Waiting for a new GUI connection...");
+            if (bind_to_gui() != ESP_OK) {
+                ESP_LOGE(GUI_TAG, "Failed to re-bind to GUI, giving up");
+                break;
+            }
+            continue;
         }
         if (bytes_received<0){
             // Handle Error Code 11 (EAGAIN / EWOULDBLOCK) -> means that no data was available right now
-            ESP_LOGI(GUI_TAG, "No data received from GUI, errno=%d", errno);
+            // ESP_LOGI(GUI_TAG, "No data received from GUI, errno=%d", errno);
             if (errno == EAGAIN || errno == EWOULDBLOCK) {        
                 // Add a small delay to avoid busy-waiting
                 vTaskDelay(pdMS_TO_TICKS(1000));            // this is not critical, we can wait and let other tasks run
@@ -382,6 +298,7 @@ void rx_from_gui(void *pvParameters)
             }
             break; 
         }
+
         else{
             ret = parse_gui_command(&gui_rx_buf, bytes_received);
             if (ret != ESP_OK) {
@@ -397,10 +314,21 @@ void rx_from_gui(void *pvParameters)
             if (xEventGroupGetBits(g_evt) & B_STOP_CMD_RPT_PENDING) {
                 xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_GUI);
                 xEventGroupClearBits(g_evt, B_STOP_CMD_RPT_PENDING);
+                ESP_LOGI(GUI_TAG, "STOP command received from GUI, preparing for restart");
+                //node_state = STATE_IDLE;
                 stop_reported = true;
                 start_reported = false;
-                vTaskDelay(pdMS_TO_TICKS(200));
-                prepare_for_restart();
+#if ESP_LOCAL_DUMMY_SENSOR
+                /* Local-dummy mode has no equivalent of enter_stop_quiesce_state()
+                 * to trigger this on its own, so it's still called directly here. */
+                prepare_for_restart_local_dummy();
+#else
+                /* Real path: enter_stop_quiesce_state() (biogap_read.c), running in
+                 * the read task, picks up B_STOP_CMD_RCV_GUI and calls
+                 * prepare_for_restart() itself once STOP delivery is confirmed.
+                 * Do NOT also call it here -- two tasks racing through
+                 * free/reinit/allocate on the same SPI bus corrupts its state. */
+#endif
             }
 
         }

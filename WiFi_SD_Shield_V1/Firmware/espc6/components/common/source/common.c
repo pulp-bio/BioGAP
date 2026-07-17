@@ -80,98 +80,53 @@ esp_err_t config_spi_nrf_master_esp_slave_pins(void){
         return ret;
     }
 
-    // Configure the DIR_CTRL pins
+    // Configure the DRDY_DIR_CTRL pin (IC5, dedicated DRDY level-translator channel).
+    // DRDY is a fixed-direction signal, always ESP -> NRF, regardless of which side
+    // is the SPI master. Per the shield schematic, DIR HIGH = A(ESP) -> B(NRF) on
+    // this transceiver, so this must be permanently driven HIGH.
     gpio_config_t io_conf_dir_ctrl = {
         .pin_bit_mask = (1ULL << NRF_ESP_DRDY_DIR_CTRL),
         .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,  
-        .pull_down_en = GPIO_PULLDOWN_ENABLE, 
-        .intr_type = GPIO_INTR_DISABLE, 
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
 
     ESP_ERROR_CHECK(gpio_reset_pin(NRF_ESP_DRDY_DIR_CTRL));
     ESP_ERROR_CHECK(gpio_config(&io_conf_dir_ctrl));
 
-    // LOW WHEN NRF IS MASTER, HIGH WHEN ESP IS MASTER.
-    ret = gpio_set_level(NRF_ESP_DRDY_DIR_CTRL, 0);
+    // Fixed HIGH: DRDY always flows ESP -> NRF (IC5 channel A->B).
+    ret = gpio_set_level(NRF_ESP_DRDY_DIR_CTRL, 1);
     if (ret!=ESP_OK){
-        ESP_LOGE(COMMON_TAG, "Failed to set NRF data-ready direction pin LOW: %s", esp_err_to_name(ret));
+        ESP_LOGE(COMMON_TAG, "Failed to set NRF data-ready direction pin HIGH: %s", esp_err_to_name(ret));
         return ret;
     }
 
+    // Configure the DIR_CTRL pin (IC2, MOSI/MISO/CS/CLK level-translator channels).
+    // Unlike DRDY_DIR_CTRL, this one's polarity depends on which side is SPI master:
+    // LOW routes MOSI/CS/CLK as NRF(B) -> ESP(A) and, via IC7's inverter feeding the
+    // MISO channel's DIR pin, gives MISO the opposite (ESP(A) -> NRF(B)) -- the
+    // correct combination for "NRF is master" (our only supported mode today).
+    gpio_config_t io_conf_spi_dir_ctrl = {
+        .pin_bit_mask = (1ULL << NRF_ESP_DIR_CTRL),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    ESP_ERROR_CHECK(gpio_reset_pin(NRF_ESP_DIR_CTRL));
+    ESP_ERROR_CHECK(gpio_config(&io_conf_spi_dir_ctrl));
+
+    // LOW: NRF is master (ESP is slave), matching IS_ESP_SPI_SLAVE.
+    ret = gpio_set_level(NRF_ESP_DIR_CTRL, 0);
+    if (ret!=ESP_OK){
+        ESP_LOGE(COMMON_TAG, "Failed to set NRF/ESP SPI direction pin LOW: %s", esp_err_to_name(ret));
+        return ret;
+    }
 
     return ESP_OK;
 }
-
-// // For future use 
-// esp_err_t config_spi_nrf_slave_esp_master_drdy_pin(void){
-//     esp_err_t ret;
-//     // Configure SPI data ready PIN
-//     gpio_config_t drdy_cfg = {
-//         .intr_type = GPIO_INTR_NEGEDGE,             // NRF will toggle DRDY pin LOW when data is ready, so trigger on falling edge
-//         .mode = GPIO_MODE_INPUT,
-//         .pin_bit_mask = (1ULL << NRF_DATA_READY_GPIO),
-//         .pull_down_en = GPIO_PULLDOWN_DISABLE,      // no pull-down needed, NRF actively drives LOW when data is ready (original: GPIO_PULLDOWN_DISABLE)
-//         .pull_up_en = GPIO_PULLUP_DISABLE,           // enable pull-up. NRF toggles the pin LOW when data is ready (oriignal: GPIO_PULLUP_ENABLE)
-//     };
-//     ESP_ERROR_CHECK(gpio_config(&drdy_cfg));
-//     ret = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-//     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-//         ESP_ERROR_CHECK(ret);
-//         return ret;
-//     }
-//     // Add ISR handler for NRF data ready interrupt. The handler will notify the read_from_biogap_task to read the data.
-//     ESP_ERROR_CHECK(gpio_isr_handler_add(NRF_DATA_READY_GPIO, nrf_data_ready_isr, NULL));
-//     ESP_LOGI(COMMON_TAG, "Configured NRF data-ready interrupt on GPIO %d", NRF_DATA_READY_GPIO);
-
-//     return ret; 
-
-// }
-
-// esp_err_t biogap_read_nrf_master_esp_slave_hw_init(void)
-// {
-//     /* Function to Initialize SPI Master and DRDY pin for NRF to ESP Transaction*/
-//     esp_err_t ret = ESP_OK;
-//     #if ENABLE_SPI_PROFILE_LOGS
-//         int64_t timer_start = esp_timer_get_time();
-//     #endif
-//     if (current_spi_mode != SPI_MODE_NRF) {
-//         ret = init_nrf_spi_master_esp_slave_bus();
-//         if (ret != ESP_OK) {
-//             ESP_LOGE(COMMON_TAG, "Failed to initialize NRF SPI bus: %s", esp_err_to_name(ret));
-//             return ret;
-//         }
-//         current_spi_mode = SPI_MODE_NRF;
-//     } 
-//     else {
-//         ESP_LOGW(COMMON_TAG, "NRF SPI bus already initialized, skipping re-init");
-//     }
-//     #if ENABLE_SPI_PROFILE_LOGS
-//         int64_t timer_stop = esp_timer_get_time();
-//         ESP_LOGI(COMMON_TAG, "SPI bus initialization time: %lld us", (long long)(timer_stop - timer_start));
-//     #endif
-
-
-    
-//     ret = config_spi_nrf_master_esp_slave_pins();
-//     if (ret != ESP_OK) {
-//         ESP_LOGE(COMMON_TAG, "Failed to configure NRF pins: %s", esp_err_to_name(ret));
-//         return ret;
-//     }
-
-
-//     ESP_LOGI(COMMON_TAG,
-//              "Initialized NRF SPI bus: MOSI=%d MISO=%d SCLK=%d CS=%d @ %d Hz (Mode: %d)",
-//              SPI_NRF_MOSI,
-//              SPI_NRF_MISO,
-//              SPI_NRF_SCLK,
-//              SPI_NRF_CS,
-//              NRF_SPI_CLOCK_HZ,
-//              current_spi_mode);
-//     return ESP_OK;
-// }
-
-
 
 
 esp_err_t validate_command(uint8_t command) {
