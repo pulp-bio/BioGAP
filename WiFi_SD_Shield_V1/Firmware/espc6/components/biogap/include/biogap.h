@@ -1,3 +1,31 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: biogap.h
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -39,9 +67,6 @@ size_t prepare_buffer(uint8_t *buffer, uint32_t counter, uint16_t bytes_per_node
 esp_err_t allocate_prequeue_resources(void);
 esp_err_t free_prequeue_resources(void);
 
-/** @brief Re-arm QUEUE_COUNT idle-content transactions on the SPI slave bus,
- *  so it's never left unarmed between a STOP and the next START. */
-esp_err_t rearm_idle_prequeue(void);
 
 /** @brief Copy len bytes into biogap_ringbuf for tx_to_gui() to drain and send to BioGUI */
 esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len);

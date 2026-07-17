@@ -1,4 +1,31 @@
-// common.h
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: common.h
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #pragma once
 
 #include <stdint.h>
@@ -39,22 +66,19 @@ extern SemaphoreHandle_t spi_bus_mutex;
 #define SPI_BUS_UNLOCK() xSemaphoreGive(spi_bus_mutex)
 
 // These are for Wi-Fi Streaming
-#define B_BIOGAP_CONECTED           (1U << 0)  // Connection with BIOGAP master verified by successful SPI transaction
-#define B_WIFI_CONNECTED            (1U << 1)  // TCP connected (socket usable)
-#define B_GUI_SOCKET_BIND           (1U << 2)  // GUI socket successfully bound and accepted (gui_sock valid)
-#define B_START_CMD_RCV             (1U << 3)  // Start command received from GUI (via TCP)
-#define B_START_CMD_FWD_TO_BIOGAP   (1U << 4)  // Start command forwarded to BIOGAP master successfully
+#define B_BIOGAP_CONECTED               (1U << 0)  // Connection with BIOGAP master verified by successful SPI transaction
+#define B_WIFI_CONNECTED                (1U << 1)  // TCP connected (socket usable)
+#define B_GUI_SOCKET_BIND               (1U << 2)  // GUI socket successfully bound and accepted (gui_sock valid)
+#define B_START_CMD_RCV                 (1U << 3)  // Start command received from GUI (via TCP)
+#define B_START_CMD_FWD_TO_BIOGAP       (1U << 4)  // Start command forwarded to BIOGAP master successfully
 #define B_STOP_CMD_RCV_GUI              (1U << 5)  // Stop command received from GUI (via TCP)
-#define B_STOP_CMD_FWD_TO_BIOGAP    (1U << 6)  // Stop command forwarded to BIOGAP master successfully
-#define B_WRITING_TO_SD             (1U << 7)  // SD task currently owns SPI MUX path
-#define B_RINGBUFFER_FULL           (1U << 8)  // Ringbuffer is full, cannot add more data until some is consumed
-#define B_STOP_STREAM               (1U << 9)  // Stop streaming requested by GUI or system policy
-#define B_END_ACQUISITION          (1U << 10)  // SD task signaled acquisition end
+#define B_STOP_CMD_FWD_TO_BIOGAP        (1U << 6)  // Stop command forwarded to BIOGAP master successfully
+#define B_RINGBUFFER_FULL               (1U << 7)  // Ringbuffer is full, cannot add more data until some is consumed
 // SPI quiesce handshake: reader sets this when outstanding pre-queued descriptors
 // have been drained and the SPI bus is safe for a STOP-frame transmit by sender.
-#define B_SPI_QUIESCED             (1U << 11)
-#define B_STOP_CMD_RCV_FORCED              (1U << 12)  // Stop command received from GUI (via TCP)
-#define B_STOP_CMD_RPT_PENDING      (1U << 13)  // GUI task should report the simulated STOP event
+#define B_SPI_QUIESCED                  (1U << 8)
+#define B_STOP_CMD_RCV_FORCED           (1U << 9)  // Stop command received from GUI (via TCP)
+#define B_STOP_CMD_RPT_PENDING          (1U << 10)  // GUI task should report the simulated STOP event
 
 
 /* Handshake ping-pong markers to validate NRF-ESP communication */
@@ -63,7 +87,6 @@ extern SemaphoreHandle_t spi_bus_mutex;
 
 // -------------------- Task stack sizes --------------------
 #define READ_FROM_BIOGAP_STACK_SIZE  4096
-
 
 // -------------------- Packet format --------------------
 #define PAYLOAD_SIZE                 1440    // application payload target for WiFi transmission, can be adjusted
@@ -88,37 +111,8 @@ extern SemaphoreHandle_t spi_bus_mutex;
 #define RINGBUFF_SIZE                200000  // bytes
 extern RingbufHandle_t ringbuff;
 
-// -------------------- SD_CARD --------------------
-#define SD_CARD_TRANSFER_SIZE         16000  // 16 KB at once 
-#define MAX_SD_WRITES                10       
-extern uint8_t sd_writecounter; 
-
-
-#define MAX_RECONNECTION_ATTEMPTS  10
-
 // -------------------- Constants for NRF-ESP SPI transfer and packet building --------------------
 #define SPI_FROM_BIOGAP_MAX_SIZE    1000   // max number of bytes in a single SPI transaction from BIOGAP (e.g. 410 if streaming from WULPUS)
-
-#define EMULATE_EXG_DATA 1
-#define EMULATE_US_DATA 0
-#if (EMULATE_EXG_DATA == 1)
-    #define NRF_EXG_PACKET_SIZE       211
-    #define NRF_EXG_HEADER            0x55
-    #define NRF_EXG_TAILER            0xAA
-    #define ESP_EXG_HEADER            0x66
-    #define ESP_EXG_TAILER            0xBB
-#endif
-#if (EMULATE_US_DATA == 1)
-    #define NRF_EXG_PACKET_SIZE       811
-    #define NRF_EXG_HEADER            0x55
-    #define NRF_EXG_TAILER            0xAA
-    #define ESP_EXG_HEADER            0x66
-    #define ESP_EXG_TAILER            0xBB
-#endif
-
-
-#define NRF_SPI_CLOCK_HZ          4000000           // 4 MHz SPI clock for NRF-ESP transfer. 
-
 
 //--------------------- SPI Transactions & Mode Switching --------
 // Single SPI host constant used for both NRF and SD card modes (runtime switching)
@@ -134,15 +128,10 @@ typedef enum {
 extern spi_device_handle_t nrf_spi_device;
 extern spi_mode_t current_spi_mode;
 
-esp_err_t biogap_read_hw_init(void);
-esp_err_t switch_to_nrf_master_spi_mode(void);
-esp_err_t switch_to_sd_spi_mode(void);
 esp_err_t config_spi_nrf_master_esp_slave_pins(void);
 esp_err_t init_nrf_spi_master_esp_slave_bus(void); 
 extern bool handshake_pq_done;
 extern bool send_start_command_to_biogap_master;
-esp_err_t validate_command(uint8_t command);
-
 
 //---------------------- Logging tags ------------------------
 // Set to 1 only when actively profiling SPI mode-switch overhead.

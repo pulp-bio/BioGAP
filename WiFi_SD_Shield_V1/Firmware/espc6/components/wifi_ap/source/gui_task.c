@@ -1,3 +1,31 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: gui_task.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "gui_task.h"
 #include "dummy_sensor_local.h"
 #include "freertos/ringbuf.h"
@@ -12,6 +40,7 @@ TaskHandle_t rx_gui_task_handle = NULL;
 static bool start_reported = false;
 static bool stop_reported = false;
 
+/** @brief Block in accept() for a single TCP connection from BioGUI on PORT_LAPTOP. */
 esp_err_t bind_to_gui()
 {
 
@@ -79,6 +108,7 @@ esp_err_t bind_to_gui()
     return ESP_OK;
 }
 
+/** @brief Drain biogap_ringbuf completely, robust against late in-flight enqueues. */
 esp_err_t rb_soft_flush(RingbufHandle_t rb)
 {
     if (rb == NULL) {
@@ -161,19 +191,6 @@ void tx_to_gui(void *pvParameters)
 /**
  * @brief Tear down and reinitialize the SPI slave bus and DMA buffers,
  * guaranteeing an empty transaction queue.
- *
- * Only safe to call once the NRF is confirmed (or very likely, see the
- * timeout fallback in enter_stop_quiesce_state()) idle -- i.e. its sender
- * thread has seen the STOP marker and won't initiate anything else on the
- * bus. Two callers:
- *  - enter_stop_quiesce_state() (biogap_read.c), right after confirming STOP
- *    delivery via the piggyback mechanism.
- *  - send_to_biogap_task_nrf_master_esp_slave()'s START handling
- *    (biogap_send.c), for every START after the first: it clears out
- *    whatever idle-content descriptors rearm_idle_prequeue() left queued,
- *    so the dedicated 4-byte control frame sent via DRDY right after is the
- *    only thing in the SPI slave's FIFO when the NRF's DRDY-triggered dummy
- *    transceive services it.
  */
 esp_err_t reset_spi_bus_for_restart(void)
 {
@@ -187,14 +204,6 @@ esp_err_t reset_spi_bus_for_restart(void)
     }
     ESP_LOGI(GUI_TAG, "Re-initialized NRF SPI bus for next acquisition");
     current_spi_mode = SPI_MODE_NRF;
-
-    // commented, first will transmit four bytes 
-    // ret = allocate_prequeue_resources();
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(GUI_TAG, "Failed to allocate pre-queue resources for new acquisition");
-    //     return ret;
-    // }
-    // ESP_LOGI(GUI_TAG, "Re-allocated pre-queue resources for next acquisition");
     return ESP_OK;
 }
 
@@ -216,30 +225,14 @@ esp_err_t prepare_for_restart(){
         return ret;
     }
     xEventGroupClearBits(g_evt, B_RINGBUFFER_FULL);
-
-    /* Arm the bus with idle-content transactions right away, instead of
-     * leaving it unarmed until the next START. Otherwise any stray NRF
-     * transaction attempt while idle reads back 0xFF/0xFF (nothing queued)
-     * instead of a valid header/tailer, which trips the NRF's halt-on-bad-
-     * frame check. */
-
-    // COMMENTED 
-    // ret = rearm_idle_prequeue();
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(GUI_TAG, "Failed to re-arm idle pre-queue for new acquisition");
-    //     vTaskDelete(NULL);
-    //     return ret;
-    // }
     start_reported = false;
     stop_reported = false;
-
-    
     xEventGroupClearBits(g_evt, B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED | B_STOP_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RPT_PENDING);
-
     return ESP_OK;
 }
 
 
+/** @brief Task: receives GUI commands and drives the START/STOP/reconnect state machine. */
 void rx_from_gui(void *pvParameters)
 {
     rx_gui_task_handle = xTaskGetCurrentTaskHandle();

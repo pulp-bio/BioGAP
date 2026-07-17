@@ -1,3 +1,30 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: main.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "esp_log.h"
 #include "softap_main.h"
@@ -20,10 +47,10 @@ uint8_t sd_writecounter = 0;
 spi_device_handle_t nrf_spi_device = NULL;
 volatile node_state_t node_state = STATE_DISCONNECTED;
 int64_t start_time = 0;
+/** @brief Boot sequence: GPIO/SPI/WiFi bring-up, then spawn the data-plane tasks. */
 void app_main()
 {
     esp_err_t ret= 0;
-
 
     // Initialize the debugging GPIO 
     gpio_config_t io_conf = {0};
@@ -47,14 +74,12 @@ void app_main()
     ESP_LOGI(MAIN_TAG, "Starting app_main, initializing system...");
     // Initialize Event Group and clear all bits
     g_evt = xEventGroupCreate();
-    xEventGroupClearBits(g_evt, B_WIFI_CONNECTED | B_BIOGAP_CONECTED | B_START_CMD_RCV | B_START_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED | B_STOP_CMD_FWD_TO_BIOGAP | B_WRITING_TO_SD);
+    xEventGroupClearBits(g_evt, B_WIFI_CONNECTED | B_BIOGAP_CONECTED | B_START_CMD_RCV | B_START_CMD_FWD_TO_BIOGAP | B_STOP_CMD_RCV_GUI | B_STOP_CMD_RCV_FORCED | B_STOP_CMD_FWD_TO_BIOGAP);
     
     
 
 #if !ESP_LOCAL_DUMMY_SENSOR
-    // Real BIOGAP integration: bring up the shared SPI bus and wait for the
-    // nRF master to complete the handshake before anything else. Skipped
-    // entirely in ESP_LOCAL_DUMMY_SENSOR mode, which needs no nRF/SPI at all.
+
     spi_bus_mutex = xSemaphoreCreateMutex();
     if (spi_bus_mutex == NULL) {
         ESP_LOGE(MAIN_TAG, "Failed to create SPI bus mutex");
@@ -64,7 +89,7 @@ void app_main()
     // SPI Handshake with NRF
     #if defined IS_ESP_SPI_SLAVE
         ESP_LOGI(MAIN_TAG, "ESP is configured as SPI SLAVE");
-        // Initialize the necessary GPIOs
+        // Initialize SPI GPIOs
         config_spi_nrf_master_esp_slave_pins();
         ESP_LOGI(MAIN_TAG, "NRF-ESP GPIO pins configured successfully");
         // Initialize the SPI BUS
@@ -72,7 +97,6 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "NRF-ESP SPI bus initialized successfully");
     #endif
 
-    //while(xEventGroupGetBits(g_evt) & B_WIFI_CONNECTED){
     while(1){
         ret = initial_handshake_nrf_master_esp_slave_pq();
         if (ret == 0) {
@@ -87,8 +111,7 @@ void app_main()
 #endif
 
     // Wi-Fi Initialization
-    ESP_LOGI(MAIN_TAG, "Before init Wifi free heap: %d, free DMA: %d", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_DMA));
-    //Initialize WiFi 
+    //ESP_LOGI(MAIN_TAG, "Before init Wifi free heap: %d, free DMA: %d", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_DMA));
     
     vTaskDelay(pdMS_TO_TICKS(1000));
     if (wifi_init_softap() != ESP_OK) {
@@ -140,9 +163,8 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "Created dummy_sensor_local task");
     }
 #else
-    // Real BIOGAP integration: nRF is the data source, reached over the SPI
-    // link brought up earlier in this function (handshake already completed).
-    // Create the RingBuffer to allocate incoming data. For now, assuming point-to-point communication (no networking)
+
+    // Create the RingBuffer to allocate incoming data.
     biogap_ringbuf = xRingbufferCreate(RINGBUFF_SIZE, RINGBUF_TYPE_NOSPLIT);
     if (biogap_ringbuf == NULL){
       ESP_LOGE(MAIN_TAG, "Failed to allocate Memory for the BIOGAP ringbuffer");
@@ -151,7 +173,7 @@ void app_main()
     ESP_LOGI(MAIN_TAG, "BIOGAP Ringbuffer created with size %d bytes", RINGBUFF_SIZE);
 
 
-    // Bind first to GUI
+    // Bind to the GUI socket. 
     ret = bind_to_gui();
     if (ret != ESP_OK) {
         ESP_LOGE(MAIN_TAG, "Failed to bind to GUI");
@@ -161,6 +183,7 @@ void app_main()
     xEventGroupSetBits(g_evt, B_GUI_SOCKET_BIND);
     node_state = STATE_IDLE;
     ESP_LOGI(MAIN_TAG, "WiFi initialized and bound to GUI successfully");
+    
     // ========================== START ALL THE TASKS =============================
 
     BaseType_t xr = xTaskCreate(read_from_biogap_task_nrf_master_esp_slave_prequeue, "read_biogap_task_nrf_master", 4096, NULL, 1, &read_from_biogap_task_nrf_master_pq_esp_slave_handle);
@@ -189,34 +212,12 @@ void app_main()
     } else {
         ESP_LOGI(MAIN_TAG, "Created tx_to_gui task");
     }
-
-    #if defined IS_WBAN
-        // To-Do: add this implementation
-        // xr= xTaskCreate(accept_nodes_task, "accept_nodes", ACCEPT_NODES_STACK_SIZE, NULL, 5, NULL);
-        // if (xr != pdPASS) {
-        //     ESP_LOGE(MAIN_TAG, "Failed to create accept_nodes_task task (err=%d)", xr);
-        // } else {
-        //     ESP_LOGI(MAIN_TAG, "Created accept_nodes_task task");
-        // }
-    #endif
-
-
-    #if ESP_ENABLE_SD_WRITE
-        BaseType_t xs = xTaskCreate(sd_card_task, "sd_card_task", 8192, NULL, 5, &sd_card_task_handle);
-        if (xs != pdPASS) {
-            ESP_LOGE(MAIN_TAG, "Failed to create sd_card_task (err=%d)", xs);
-        } else {
-            ESP_LOGI(MAIN_TAG, "Created sd_card_task");
-        }
-    #endif
 #endif
     // Main Thread can now sleep and let the tasks do the work.
 
     while(1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-
-
 }
 
 

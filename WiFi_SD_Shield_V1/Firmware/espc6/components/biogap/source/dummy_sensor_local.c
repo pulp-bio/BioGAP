@@ -1,3 +1,31 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: dummy_sensor_local.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "dummy_sensor_local.h"
 #include "biogap.h"
 #include "gui_task.h"
@@ -7,8 +35,7 @@
 
 #define DUMMY_LOCAL_TAG "[dummy_sensor_local.c]"
 
-/* Matches the nRF dummy sensor exactly: 4 samples/packet at 100ms/sample
- * (Firmware/src_NRF/sensors/dummy_sensor/dummy_sensor_appl.h, SENSOR_SAMPLING_PERIOD_MS). */
+
 #define DUMMY_SAMPLES_PER_PACKET   4
 #define DUMMY_BYTES_PER_SAMPLE     50
 #define DUMMY_PACKET_PERIOD_MS     (1 * DUMMY_SAMPLES_PER_PACKET)
@@ -46,6 +73,7 @@ static void build_dummy_packet(uint8_t *packet, uint16_t counter)
     packet[NRF_EXG_PACKET_SIZE - 1] = NRF_EXG_TAILER;
 }
 
+/** @brief Task: generates and streams synthetic packets when ESP_LOCAL_DUMMY_SENSOR is set. */
 void dummy_sensor_local_task(void *pv)
 {
     (void)pv;
@@ -77,6 +105,7 @@ void dummy_sensor_local_task(void *pv)
     }
 }
 
+/** @brief Local-dummy-mode counterpart of prepare_for_restart(): flush ring buffer and clear STOP bits. */
 esp_err_t prepare_for_restart_local_dummy(void)
 {
     xEventGroupWaitBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);

@@ -1,3 +1,30 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: biogap_send.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "biogap.h"
 #include "common.h"
@@ -17,6 +44,7 @@ uint8_t rx_from_biogap_buf[4] __attribute__((aligned(4)));
 static TaskHandle_t send_to_biogap_task_handle = NULL;
 static esp_timer_handle_t drdy_pulse_timer_handle = NULL;
 
+/** @brief Timer callback that ends the DRDY pulse and wakes the waiting sender task. */
 static void drdy_pulse_timer_callback(void *arg)
 {
     gpio_set_level(NRF_ESP_DATA_READY, 0);
@@ -25,6 +53,7 @@ static void drdy_pulse_timer_callback(void *arg)
     }
 }
 
+/** @brief Pulse the DRDY GPIO high for NRF_DRDY_PULSE_US to signal a pending command. */
 static esp_err_t data_ready_pulse(void)
 {
     esp_err_t ret;
@@ -40,56 +69,7 @@ static esp_err_t data_ready_pulse(void)
     return ESP_OK;
 }
 
-
-static esp_err_t send_command_to_biogap_master(uint8_t command)
-{
-
-    /* Overwrite the shared streaming TX buffer so any pre-queued
-     * descriptor that is still in flight does not keep returning the
-     * previous packet data while we transition to STOP.
-     */
-    if (sendbuf_persistent) {
-        memset(sendbuf_persistent, 0, NRF_EXG_PACKET_SIZE);
-        sendbuf_persistent[0] = ESP_EXG_HEADER; 
-        sendbuf_persistent[1] = command;               // to signal the command to the master
-        sendbuf_persistent[2] = 0x00;                     // nothing
-        sendbuf_persistent[NRF_EXG_PACKET_SIZE - 1] = ESP_EXG_TAILER;
-    }
-
-
-    // last working
-    for (int i = 0; i < QUEUE_COUNT; i++) {
-        if (tx_bufs[i]) {
-            memcpy(tx_bufs[i], sendbuf_persistent, NRF_EXG_PACKET_SIZE);
-        }
-    }
-
-
-    spi_slave_transaction_t *ret_trans;
-    esp_err_t ret;
-
-    // basically sending stop using SPI
-    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
-        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to lock SPI bus mutex while draining command frame");
-        return ESP_FAIL;
-    }
-
-    ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
-    SPI_BUS_UNLOCK();
-    if (ret != ESP_OK) {
-        ESP_LOGI(BIOGAP_SEND_TAG, "Failed to drain in-flight transaction during STOP quiesce");
-         /* No need to process the data since we're stopping, just re-queue the descriptor immediately to flush it out. */
-        return ret; 
-    }
-    uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
-
-    /* Validate packet markers (header + tailer) */
-
-    ESP_LOGI(BIOGAP_SEND_TAG, "Sent packet: [0]=0x%02X [1]=0x%02X [2] 0x%02X [last]=0x%02X)",
-             tx_data[0], tx_data[1], tx_data[2], tx_data[NRF_EXG_PACKET_SIZE - 1]);
-    return ESP_OK;
-
-}
+/** @brief Transmit a 4-byte control frame (header, opcode, 0x00, tailer) to the NRF. */
 static esp_err_t send_first_start_command_to_biogap_master(uint8_t command)
 {
     esp_err_t ret;
@@ -105,7 +85,7 @@ static esp_err_t send_first_start_command_to_biogap_master(uint8_t command)
 
 
     spi_slave_transaction_t t = {0};
-    t.length = sizeof(tx_to_biogap_buf) * 8;  /* exactly 4 bytes = 32 bits */
+    t.length = sizeof(tx_to_biogap_buf) * 8;  /* 4 bytes = 32 bits */
     t.tx_buffer = tx_to_biogap_buf;
     t.rx_buffer = rx_from_biogap_buf;
 
@@ -122,15 +102,13 @@ static esp_err_t send_first_start_command_to_biogap_master(uint8_t command)
         return ret;
     }
 
-
-
     ESP_LOGI(BIOGAP_SEND_TAG, "Transmitted 4-byte control frame: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X",
              tx_to_biogap_buf[0], tx_to_biogap_buf[1], tx_to_biogap_buf[2], tx_to_biogap_buf[3]);
-    //ESP_LOGI(BIOGAP_SEND_TAG, "Received byte: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X", rx_from_biogap_buf[0], rx_from_biogap_buf[1], rx_from_biogap_buf[2], rx_from_biogap_buf[3]);
 
     return ESP_OK;
 }
 
+/** @brief Pulse DRDY then send the 4-byte control frame; used for every START. */
 esp_err_t propagate_first_start_command_to_biogap_master(uint8_t command)
 {
     esp_err_t ret = data_ready_pulse();
@@ -140,21 +118,10 @@ esp_err_t propagate_first_start_command_to_biogap_master(uint8_t command)
     return send_first_start_command_to_biogap_master(command);
 }
 
-esp_err_t propagate_command_to_biogap_master(uint8_t command)
-{
-    esp_err_t ret = data_ready_pulse();
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    // add a small debouncing delay
-    vTaskDelay(pdMS_TO_TICKS(1));
-    return send_command_to_biogap_master(command);
-}
 
-
+/** @brief Task: forwards GUI START commands to the NRF over SPI. */
 void send_to_biogap_task_nrf_master_esp_slave(void *pv){
 
-    // here we should check the current status (connected,ide etc). Keep it simple for now to verify connectivity 
     esp_err_t ret; 
     send_to_biogap_task_handle = xTaskGetCurrentTaskHandle();
     bool first_time = true; 
@@ -196,27 +163,11 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
             
             uint8_t start_command = rx_gui_data_to_fwd[0]; 
             ESP_LOGI(BIOGAP_SEND_TAG, "Received command from GUI, propagating to BIOGAP master start_command=%d", (unsigned)start_command);
-            // if (first_time){
-            //     first_time = false;
-            //     ret = propagate_first_start_command_to_biogap_master(start_command);
-            // }
-            // else{
-            //     // we are already armed for full lenght transaction
-            //     ret = propagate_command_to_biogap_master(start_command);
-            //     //}
-            // }
 
             ret = propagate_first_start_command_to_biogap_master(start_command);
             if (ret == ESP_OK) {
                 /* Only now -- control frame confirmed delivered -- allocate the
-                 * 211-byte DMA buffers for the upcoming streaming session.
-                 * reset_spi_bus_for_restart() frees these after STOP but no
-                 * longer reallocates them, so without this call they'd stay
-                 * NULL and the read task's prequeue_transactions() would
-                 * memcpy/queue against null pointers on every START after the
-                 * first. Safe to call unconditionally (including the very
-                 * first START): it no-ops around already-allocated buffers
-                 * instead of leaking. */
+                 * DMA buffers for the upcoming streaming session. */
                 esp_err_t alloc_ret = allocate_prequeue_resources();
                 if (alloc_ret != ESP_OK) {
                     ESP_LOGE(BIOGAP_SEND_TAG, "Failed to allocate pre-queue resources after START, will retry: %s", esp_err_to_name(alloc_ret));
@@ -237,13 +188,6 @@ void send_to_biogap_task_nrf_master_esp_slave(void *pv){
                 xEventGroupSetBits(g_evt, B_START_CMD_RCV);
             }
         }
-
-        /* B_SPI_QUIESCED is included in the wait mask below only so this task
-         * wakes up (nothing to do here on it): enter_stop_quiesce_state()
-         * (biogap_read.c) now handles the entire STOP sequence itself --
-         * confirming delivery, setting node_state/event bits, and calling
-         * prepare_for_restart() -- directly in the read task. */
-
         if (bits & B_RINGBUFFER_FULL) {
             ESP_LOGW(BIOGAP_SEND_TAG, "Ringbuffer backpressure signaled");
         }

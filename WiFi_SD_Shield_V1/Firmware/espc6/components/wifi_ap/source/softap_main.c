@@ -1,3 +1,31 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: softap_main.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "softap_main.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -6,6 +34,7 @@
 
 static const char *TAG = "softap_main.c";
 
+/** @brief Log WiFi AP station connect/disconnect events. */
 static void wifi_station_event_handler(void* arg, esp_event_base_t event_base,
                                     int32_t event_id, void* event_data)
 {
@@ -19,6 +48,7 @@ static void wifi_station_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+/** @brief Initialize NVS/netif/event loop and bring up the WiFi SoftAP. */
 esp_err_t wifi_init_softap(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -30,34 +60,22 @@ esp_err_t wifi_init_softap(void)
         return ret;
     }
 
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "Nvs OKAY"); 
-
     ret = esp_netif_init();
     if (ret != ESP_OK) {
         return ret;
     }
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_netif_init OKAY"); 
 
     ret = esp_event_loop_create_default();
     if (ret != ESP_OK) {
         return ret;
     }
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_event_loop_create_default OKAY");
 
     esp_netif_create_default_wifi_ap();
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_netif_create_default_wifi_ap OKAY");
-
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ret = esp_wifi_init(&cfg);
     if (ret != ESP_OK) {
         return ret;
     }
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_wifi_init OKAY");
 
     ret = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_station_event_handler, NULL, NULL);
     if (ret != ESP_OK) {
@@ -90,29 +108,19 @@ esp_err_t wifi_init_softap(void)
     if (ret != ESP_OK) {
         return ret;
     }
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_wifi_set_mode(WIFI_MODE_AP); OKAY");
+
     ret = esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
     if (ret != ESP_OK) {
         return ret;
     }
-    //vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGI(TAG, "esp_wifi_set_config(WIFI_IF_AP, &wifi_config); OKAY");
-    gpio_set_level(RTC_SCL, 0);
+
+    //gpio_set_level(RTC_SCL, 0);
     ret = esp_wifi_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
         return ret;
     }
-    gpio_set_level(RTC_SCL, 1);
+    //gpio_set_level(RTC_SCL, 1);
     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d", EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS, (int)EXAMPLE_ESP_WIFI_CHANNEL);
     return ESP_OK;
-}
-
-void tcp_server_task(void *pvParameters)
-{
-    ESP_LOGI("TCP", "Ready to accept connections...");
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
 }

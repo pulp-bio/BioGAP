@@ -1,26 +1,29 @@
-/**
- * @file biogap_read_highspeed_prequeue.c
- * @brief High-speed SPI slave implementation using pre-queue pattern
- * 
- * BACKGROUND:
- * The original implementation uses sequential queue+get pattern:
- *   1. spi_slave_queue_trans(desc)
- *   2. spi_slave_get_trans_result(desc)
- *   3. repeat
- * 
- * At high transaction rates (low inter-packet delay), the master sends back-to-back
- * packets faster than the slave can arm its receive descriptors. During the gap between
- * step 2 and step 1 in the next iteration, the slave is UNARMED and loses data.
- * 
- * SOLUTION:
- * Use pre-queue pattern with N buffers (QUEUE_COUNT=4) to keep slave always armed:
- *   1. Pre-allocate QUEUE_COUNT RX buffers with MALLOC_CAP_DMA
- *   2. Pre-queue all N transactions before main loop
- *   3. In main loop: get_result() → validate → re-queue (keeps queue full)
- *   4. Slave is ALWAYS armed; no gaps between transactions
- * 
- * EXPECTED RESULT:
- * Continuous high-speed packet streaming without data corruption or gaps.
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: biogap_read.c
+ *
+ * Last edited: 17.07.2026
+ *
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "biogap.h"
@@ -48,25 +51,6 @@
 
 #define BIOGAP_READ_TAG "biogap_read_hs"
 
-#define DRDY_WAIT_TIMEOUT_MS 100
-#define DRDY_LED_BLINK_INTERVAL_MS 150
-#define DRDY_LOG_INTERVAL_MS 500
-#define HANDSHAKE_RETRY_DELAY_MS 20
-#define HANDSHAKE_MAX_RETRIES 50
-
-/* STOP is delivered to the NRF only by piggybacking on the response of the
- * NEXT regular data transaction the NRF (master) happens to initiate on its
- * own sampling cadence -- there is no dedicated STOP transfer. That cadence
- * can be as slow as ~400ms (dummy sensor: 100ms sample period x 4 samples per
- * packet), so this must poll/retry for long enough to actually observe that
- * delivery before the caller tears down and reinitializes the SPI slave bus
- * (prepare_for_restart()) -- otherwise the bus gets reset before the NRF ever
- * saw the STOP marker, and the NRF is left stuck trying to stream to a bus
- * that no longer has anything queued for it. */
-#define STOP_DRAIN_TIMEOUT_MS 1500
-#define STOP_DRAIN_POLL_MS 100
-
-
 #define PACKET_SZ NRF_EXG_PACKET_SIZE
 
 /* Ensure per-transaction packet size never exceeds configured SPI bus transfer cap */
@@ -76,22 +60,12 @@ _Static_assert(PACKET_SZ <= SPI_FROM_BIOGAP_MAX_SIZE,
 // =============================================================================
 // GLOBALS FOR PRE-QUEUE PATTERN
 // =============================================================================
-
-/* Persistent DMA buffers and descriptors (pre-allocated once at task start) */
-// static uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
-// static uint8_t *tx_bufs[QUEUE_COUNT] = {NULL};           /* TX buffers for each pre-queued desc */
-// static spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
 uint8_t *rx_bufs[QUEUE_COUNT] = {NULL};           /* RX buffers for each pre-queued desc */
 uint8_t *tx_bufs[QUEUE_COUNT] = {NULL};           /* TX buffers for each pre-queued desc */
 spi_slave_transaction_t trans_descs[QUEUE_COUNT]; /* Transaction descriptors */
 uint8_t *sendbuf_persistent = NULL;               /* Single TX buffer for all desciptors */
 static bool prequeued = false;
-
 bool handshake_pq_done = false;
-
-
-
-
 
 // =============================================================================
 // HELPER: Pre-queue all RX transactions
@@ -99,8 +73,7 @@ bool handshake_pq_done = false;
 /**
  * @brief Pre-queue QUEUE_COUNT transactions so slave remains armed at all times.
  * 
- * This function must be called once after handshake succeeds, before the main
- * streaming loop. It initializes transaction descriptors and queues them all,
+ * This function initializes the transaction descriptors and queues them all,
  * so the slave is ready to receive the first packet immediately.
  * 
  * @return ESP_OK on success, ESP_FAIL if any queue operation fails
@@ -128,13 +101,13 @@ static esp_err_t prequeue_transactions(void)
         }
     }
     SPI_BUS_UNLOCK();
-    //ESP_LOGI(BIOGAP_READ_TAG, "Pre-queued %d SPI slave transactions (slave now ALWAYS armed)", QUEUE_COUNT);
     return ESP_OK;
 }
 
 // =============================================================================
 // HELPER: Add packet to ringbuffer
 // =============================================================================
+/** @brief Copy a packet into biogap_ringbuf for tx_to_gui() to relay to BioGUI. */
 esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
 {
     void *rb_ptr = NULL;
@@ -150,15 +123,18 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
 // =============================================================================
 // HELPER: Validate packet markers
 // =============================================================================
+/** @brief Check NRF_EXG_HEADER/TAILER framing on a received (RX) buffer. */
 static inline bool is_valid_packet(const uint8_t *data)
 {
     return (data[0] == NRF_EXG_HEADER && data[PACKET_SZ - 1] == NRF_EXG_TAILER);
 }
+/** @brief Check ESP_EXG_HEADER/TAILER framing on a transmitted (TX) buffer. */
 static inline bool is_valid_tx_packet(const uint8_t *data)
 {
     return (data[0] == ESP_EXG_HEADER && data[PACKET_SZ - 1] == ESP_EXG_TAILER);
 }
 
+/** @brief Free the DMA-capable TX/RX pre-queue buffers. */
 esp_err_t free_prequeue_resources(void)
 {
     if (sendbuf_persistent) {
@@ -182,6 +158,7 @@ esp_err_t free_prequeue_resources(void)
     return ESP_OK;
 }
 
+/** @brief Allocate (or reset) the DMA-capable TX/RX pre-queue buffers. */
 esp_err_t allocate_prequeue_resources(void)
 {
     if (sendbuf_persistent != NULL) {
@@ -232,6 +209,8 @@ esp_err_t allocate_prequeue_resources(void)
     return ESP_OK;
 }
 
+/** @brief Handle STOP command received from the GUI: 
+ * piggyback the request, confirm the NRF's ACK, then reset/re-arm the SPI bus. */
 static esp_err_t enter_stop_quiesce_state(void)
 {
     ESP_LOGI(BIOGAP_READ_TAG, "Stop requested, idling until next START (sender will drain)");
@@ -255,12 +234,8 @@ static esp_err_t enter_stop_quiesce_state(void)
 
 
     bool stop_delivered = false;
-    // int64_t deadline_us = esp_timer_get_time() + (int64_t)STOP_DRAIN_TIMEOUT_MS * 1000;
-    
-    // send stop command multiple times
     uint8_t send_stop_command_count = 0;
     bool stop_ack_received = false;
-    //while(send_stop_command_count < 3 && !stop_delivered) {
     while(stop_ack_received == false) {
         ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
         if (ret == ESP_OK) {
@@ -282,17 +257,14 @@ static esp_err_t enter_stop_quiesce_state(void)
                 ESP_LOGI(BIOGAP_READ_TAG, "STOP ACK received");
                 stop_ack_received = true;
                 send_stop_command_count = 0;
-                // Transition the ESP-side communication state here.
             } 
             else {
                 send_stop_command_count++;
             }
         }
         }
-        //SPI_BUS_UNLOCK(); removed
 
     ESP_LOGI(BIOGAP_READ_TAG, "STOP command delivery confirmed after %d attempts", send_stop_command_count);
-    //EventGroupSetBits(g_evt, B_SPI_QUIESCED);
     node_state = STATE_IDLE;
     prequeued = false;
     xEventGroupSetBits(g_evt, B_STOP_CMD_FWD_TO_BIOGAP);
@@ -301,69 +273,29 @@ static esp_err_t enter_stop_quiesce_state(void)
     return ESP_OK;
 }
 
-/**
- * @brief Re-arm QUEUE_COUNT idle-content transactions right after the SPI
- * slave bus is torn down and reinitialized for the next session.
- *
- * prepare_for_restart() (gui_task.c) frees/reinitializes the SPI slave bus
- * after a STOP, but previously left it with nothing queued until the NEXT
- * START's prequeue_transactions() call -- an unarmed slave for however long
- * the system then sits idle. If the NRF ever clocks a transaction during
- * that window (e.g. STOP delivery confirmation timed out and it never got
- * the memo, or any other stray attempt), it reads back 0xFF/0xFF garbage
- * instead of a valid header/tailer, which trips its own halt-on-bad-frame
- * check (wifi_sd_spi_functions.c). Call this immediately after
- * allocate_prequeue_resources() so the bus is never left unarmed.
- */
-esp_err_t rearm_idle_prequeue(void)
-{
-    esp_err_t ret = prequeue_transactions();
-    if (ret == ESP_OK) {
-        prequeued = true;
-    } else {
-        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-arm idle pre-queue: %s", esp_err_to_name(ret));
-    }
-    return ret;
-}
-
 // =============================================================================
 // MAIN TASK: High-speed SPI slave with pre-queue pattern
 // =============================================================================
 /**
  * @brief Main SPI slave task using pre-queue pattern for high-speed streaming.
- * 
- * FLOW:
- *   1. Handshake with NRF master (exchange 0x5A ↔ 0xA5)
- *   2. Allocate QUEUE_COUNT RX buffers (DMA-capable)
- *   3. Pre-queue all transactions (slave armed QUEUE_COUNT times)
- *   4. Main loop: get_result() → validate → re-queue (maintains constant queue depth)
- * 
- * KEY ADVANTAGE:
- *   - No gap between consecutive transactions
- *   - Slave ALWAYS has at least one descriptor armed
- *   - Master never finds slave unarmed; no packet loss
- * 
- * @param pv Task parameter (unused)
  */
 void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 {
 
     uint64_t packet_count = 0;
     uint16_t tx_counter = 0;  /* Transmit counter sent to master */
-    int64_t last_log_us = 0;
     esp_err_t ret;
     ret = allocate_prequeue_resources();
     read_from_biogap_task_nrf_master_pq_esp_slave_handle = xTaskGetCurrentTaskHandle();
     bool first_read = true;
     /* === MAIN LOOP === */
     while (1) {
-        
         /* === HANDSHAKE PHASE === */
         /* Handshake is executed at startup in main; block here until the connected bit is set */
         xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
         /* Wait until a start command has been forwarded to BIOGAP (sleep until bit set) */
         xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
-        //ESP_LOGI(BIOGAP_READ_TAG, "B_START_CMD_FWD_TO_BIOGAP received");
+
         if(!prequeued){
             ret = prequeue_transactions();
             if (ret != ESP_OK) {
@@ -397,9 +329,6 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
         else{
 
             if (node_state == STATE_STREAMING){
-                if(first_read == true){
-                    ESP_LOGI(BIOGAP_READ_TAG, "First transaction in progress");
-                }
                 spi_slave_transaction_t *ret_trans = NULL;
                 if (!SPI_BUS_LOCK(portMAX_DELAY)) {
                     ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for transaction receive");
@@ -462,23 +391,18 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 if (ret != ESP_OK) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
                     xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
-                    // check if thr stop command has not been set already to avoid setting it multiple times
+                    // check if the stop command has not been set already to avoid setting it multiple times
                     if(xEventGroupGetBits(g_evt) & B_STOP_CMD_RCV_GUI){
                         ESP_LOGI(BIOGAP_READ_TAG, "STOP command already received, not forwarding another STOP to BIOGAP master");
                     }
                     else{
                         ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg");
-                        /* Piggybacked STOP frame carries rx_gui_data_to_fwd[0] as its
-                         * opcode byte (see enter_stop_quiesce_state()); without setting
-                         * it here it would still hold whatever command was last
-                         * forwarded (typically the session's START opcode), so the NRF
-                         * would dispatch the wrong command. */
                         rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
                         xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
                     }
                     continue; // jump to next iteration so the STOP check can run immediately
                 }
-                /* Update this descriptor's TX buffer for its next transaction */
+                /* Update the descriptor's TX buffer for its next transaction */
                 tx_counter++;  /* Advance transmit counter */
                 tx_data[0] = ESP_EXG_HEADER;
                 tx_data[PACKET_SZ - 1] = ESP_EXG_TAILER;

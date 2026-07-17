@@ -25,10 +25,11 @@ main/                       app_main(): boot sequence, task creation
 components/common/          shared config, pin definitions, SPI/GPIO bring-up
 components/biogap/          nRF <-> ESP32 SPI link (handshake, read, send, dummy-sensor test path)
 components/wifi_ap/         WiFi SoftAP + TCP server + GUI command/data tasks
-components/sdcard_spi/      SD card writer (currently disabled, see Config flags)
-components/led_strip/       status LED
-components/arduino/         vendored Arduino-as-component (used for led_strip only)
 ```
+
+(SD-card writer, LED-strip status, and the vendored Arduino-as-component dependency it
+needed have all been removed from the project — see Config flags for the now-vestigial
+`ESP_ENABLE_SD_WRITE` flag.)
 
 ## State machine
 
@@ -244,7 +245,7 @@ boot in `config_spi_nrf_master_esp_slave_pins()` (`common.c`) and never change a
 runtime — the shield's bus direction is fixed for the "nRF is SPI master" topology this
 firmware implements.
 
-### SD card SPI (only when ESP acts as SPI master to the SD card directly; currently disabled)
+### SD card SPI (pins reserved on the shield; the SD-writer component that used them has been removed)
 
 | Signal | GPIO | Notes |
 |---|---|---|
@@ -270,7 +271,7 @@ firmware implements.
 |---|---|---|
 | `IS_WBAN` | 0 | Multi-node WBAN accept-loop mode (not yet implemented, `main.c` has a stubbed-out call site). |
 | `IS_ESP_SPI_SLAVE` | 1 | ESP is always the SPI slave, nRF the master. No other mode is currently supported end-to-end. |
-| `ESP_ENABLE_SD_WRITE` | 0 | Enable the SD-card write task (`sd_card_task`), competes with `tx_to_gui()` for the same ring buffer — leave off unless actively testing SD write. |
+| `ESP_ENABLE_SD_WRITE` | 0 | Was intended to enable an SD-card write task; the `sdcard_spi` component has since been removed from the project, so this is now vestigial — leave at 0 (setting it to 1 will fail to build until/unless SD support is reintroduced). |
 | `ESP_LOCAL_DUMMY_SENSOR` | 0 | When 1, bypasses SPI/nRF entirely: the ESP generates synthetic dummy-sensor packets locally (`dummy_sensor_local.c`, byte-identical wire format to the nRF's `dummy_sensor_appl.c`) and streams them straight to BioGUI. Useful for testing the WiFi/GUI half of the system in isolation, with no nRF/SPI hardware attached. When 0 (real integration), the SPI/handshake bring-up in `main.c` runs and the real SPI read/send tasks are created instead. |
 
 ## WiFi / TCP
@@ -310,8 +311,3 @@ Other known limitations:
 - The malformed/misframed-packet path in `biogap_read.c`'s main streaming loop calls
   `break` (kills the read task) rather than logging and continuing — a single corrupted
   SPI transaction can currently take down streaming.
-- `IS_WBAN` multi-node mode is not implemented (`accept_nodes_task` is only a comment).
-- `tcp_server_task()` in `softap_main.c` is dead code (never spawned).
-
-See `Firmware/docs/wifi_dummy_sensor_integration_plan.md` for the step-by-step
-integration/verification plan this firmware was brought up against.

@@ -3,9 +3,9 @@
  *
  * File: connectivity_commands.h
  *
- * Last edited: 22.05.2026
+ * Last edited: 17.07.2026
  *
- * Copyright (C) 2026, ETH Zurich
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
  *
  * Authors:
  * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
@@ -33,50 +33,19 @@
  * @file connectivity_commands.h
  * @brief Connectivity Protocol Command Definitions
  *
- * This header defines the command codes used in the connectivity communication
- * protocol between the SENSEI board and the host application. 
- * It finds an equivalent in the BIOGAP firmware to ensure consistent command handling across the system 
+ * This header defines extra commands needed for the connectivity between ESP and the BIOGUI.
+ * The ESP acts as a bridge between the BIOGAP and the GUI, forwarding commands and data.
+ * Full list of commands can be found in the BIOGAP firmware's connectivity_commands.h file. 
  */
 
-/*==============================================================================
- * Connectivity Command Codes
- *============================================================================*/
-
-#define GET_DEVICE_SETTINGS 13
-#define REQUEST_HARDWARE_VERSION 14
-#define GET_BOARD_STATE 15
-#define REQUEST_BATTERY_STATE 17
-#define START_EEG_STREAMING 18
-#define STOP_EEG_STREAMING 19
-#define SET_BOARD_STATE 20
-#define RESET_BOARD 21
-#define ENTER_BOOTLOADERT_MODE 22
-#define SET_TRIGGER_STATE 23
-#define GO_TO_SLEEP 24
-#define RESET_GAP9 25
-#define START_MIC_STREAMING 26
-#define STOP_MIC_STREAMING 27
-#define REQUEST_AVAILABLE_SENSORS 28
-#define REQUEST_FIRMWARE_VERSION 29
-#define REQUEST_CONNECTING_STRING 30
-#define START_STREAMING_ALL 31
-#define STOP_STREAMING_ALL 32
-#define START_IMU_STREAMING 33
-#define STOP_IMU_STREAMING 34
-#define START_EEG_MIC_STREAMING 35
-#define STOP_EEG_MIC_STREAMING 36
-#define SET_DEVICE_SETTINGS 12
-#define START_EMG_STREAMING 37
-#define STOP_EMG_STREAMING 38
-/* Deliberately NOT 250/251 (0xFA/0xFB): the nRF firmware's WULPUS driver
- * treats those as protocol-internal "new config"/"restart" markers embedded
- * in raw MSP430 config bytes forwarded through its command dispatcher --
- * must stay in sync with Firmware/src_NRF/core/connectivity_commands.h. */
 #define START_DUMMY_STREAMING 243
 #define STOP_DUMMY_STREAMING 244
 #define ESP_STOP_COMMAND 245
 
-#endif // CONNECTIVITY_COMMANDS_H
+#define NRF_EXG_HEADER            0x55
+#define NRF_EXG_TAILER            0xAA
+#define ESP_EXG_HEADER            0x66
+#define ESP_EXG_TAILER            0xBB
+#define NRF_EXG_PACKET_SIZE       211
 
-/** @brief Validates a received command */
-esp_err_t validate_command(uint8_t command); 
+#endif // CONNECTIVITY_COMMANDS_H
