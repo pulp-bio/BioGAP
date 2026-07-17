@@ -82,37 +82,6 @@ void process_esp_data(void) {
         LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
         while (1) {k_sleep(K_FOREVER);}
     }
-    // }
-    // else{
-    //     // In case of stop-restart, esp will send full packet, so we need to read it and process it
-    //     uint8_t spi_tx_buf[esp_spi_packet_size];
-    //     uint8_t spi_rx_buf[esp_spi_packet_size];
-
-    //     memset(spi_tx_buf, 0, sizeof(spi_tx_buf));
-    //     memset(spi_rx_buf, 0, sizeof(spi_rx_buf));
-
-    //     // queue the SPI trasnaction four times 
-    //     uint8_t num_spi_transactions = 4;
-    //     while(num_spi_transactions > 0){
-    //         (void)spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
-    //         num_spi_transactions--;
-    //     }
-
-
-    //     if (spi_rx_buf[0] == ESP_SPI_HEADER && spi_rx_buf[esp_spi_packet_size-1] == ESP_SPI_TAILER) {
-    //         LOG_INF("Received valid data from ESP: [0] 0x%02X [1] 0x%02X [2] 0x%02X [last] 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[esp_spi_packet_size-1]);
-    //         handle_connectivity_command(&spi_rx_buf[1], 1);
-    //         }
-    //     else{
-    //         LOG_WRN("Received invalid data from ESP, ignoring: [0] 0x%02X [1] 0x%02X [2] 0x%02X [last] 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[esp_spi_packet_size-1]);
-    //         // halt the system
-    //         LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
-    //         while (1) {k_sleep(K_FOREVER);}
-    //     }
-
-
-
-    // }
     serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding
 
     }
@@ -208,7 +177,6 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
 
                 // check we are in the correct state to send data to ESP
                 if (nrf_esp_comm_state != SEND_TO_ESP) {
-                    //LOG_WRN("Not in correct state to send data to ESP, current state: %d. Packet sending deferred.", nrf_esp_comm_state);
                     // Yield and retry later
                     k_msleep(1);
                     continue;

@@ -68,8 +68,6 @@ static K_SEM_DEFINE(dummy_sensor_start_sem, 0, 1);
 uint8_t dummy_sensor_buf[DUMMY_SENSOR_PCKT_SIZE];
 static uint16_t dummy_sensor_buf_idx = DUMMY_SAMPLE_HEADER_SIZE; /* Start after header space */
 static uint8_t dummy_sensor_pkt_counter = 0;
-static bool first_run = true;
-
 static void dummy_periodic_timer_expiry(struct k_timer *timer);
 K_TIMER_DEFINE(dummy_periodic_timer, dummy_periodic_timer_expiry, NULL);
 K_SEM_DEFINE(dummy_data_ready_sem, 0, 1);
@@ -160,7 +158,11 @@ int dummy_sensor_start_streaming(void) {
   // Start dummy sensor hardware. Timer to generate synthetic data ready
   k_timer_start(&dummy_periodic_timer, K_MSEC(SENSOR_SAMPLING_PERIOD_MS), K_MSEC(SENSOR_SAMPLING_PERIOD_MS));
   /* Signal thread to complete startup (sync barrier + ads_start) */
+
+  // wait a bit
+  k_msleep(1000);
   k_sem_give(&dummy_sensor_start_sem);
+
   LOG_INF("Signaled Dummy Sensor streaming thread to start");
 
   return 0;
@@ -201,11 +203,14 @@ static void dummy_sensor_streaming_thread(void *arg1, void *arg2, void *arg3) {
 
   int ret;
 
+
   LOG_INF("Dummy sensor streaming thread started, waiting for initialization signal...");
 
   while (1) {
     /* Wait for start signal from dummy_sensor_start_streaming() */
     k_sem_take(&dummy_sensor_start_sem, K_FOREVER);
+    // wait for the first run to complete initialization
+
     dummy_sensor_state = DUMMY_SENSOR_STATE_STREAMING;
 
     while (dummy_sensor_keep_running) {
