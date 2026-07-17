@@ -39,6 +39,9 @@
 #include "sensors/dummy_sensor/dummy_sensor_appl.h"
 #if defined(CONFIG_WI_FI)
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#include "wifi_sd_shield/wifi_sd_shield_defs.h"
+
+uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the current SPI packet from ESP
 #endif
 #if defined(CONFIG_SENSOR_PPG_NEW)
 #include "sensors/ppg_new/ppg_new_appl.h"
@@ -200,6 +203,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
   #if defined(CONFIG_DUMMY_SENSOR)
+    esp_spi_packet_size = DUMMY_SENSOR_PCKT_SIZE; // Set the expected SPI packet size for dummy sensor
     dummy_sensor_start_streaming();
   #else
     LOG_WRN("Dummy sensor not built (CONFIG_DUMMY_SENSOR=n) - ignoring START_DUMMY_STREAMING");

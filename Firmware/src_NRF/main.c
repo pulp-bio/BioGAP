@@ -140,6 +140,7 @@ int main(void) {
     LOG_ERR("PWR Start failed!");
   }
 
+
 //  LOG_INF("Initializing ADS...");
   ret = ads_dr_init();
 
@@ -168,6 +169,7 @@ int main(void) {
   start_bluetooth_adverts();
 #endif
 
+
 #if defined(CONFIG_DUMMY_SENSOR)
   LOG_INF("Initializing Dummy Sensor...");
   if (dummy_sensor_init() != 0) {
@@ -177,6 +179,7 @@ int main(void) {
   }
 #endif
 
+/*    COMMENTED OUT FOR NOW 
   // Initialize microphone
   LOG_INF("Initializing microphone...");
   //if (mic_init() != 0) {
@@ -192,10 +195,13 @@ int main(void) {
   } else {
     LOG_INF("IMU initialized");
   }
+*/
 
 /* EEG and EMG can both be built into one image; the mode (unipolar vs
  * bipolar rails) is selected at runtime by the GUI start command, and
  * simultaneous streaming is rejected in eeg/emg_start_streaming(). */
+
+/*
 #if defined(CONFIG_SENSOR_EEG)
   // Initialize EEG subsystem
   LOG_INF("Initializing EEG subsystem...");
@@ -239,12 +245,14 @@ int main(void) {
 
   // Initialize inter-board synchronization
   LOG_INF("Initializing board sync...");
-//  if (board_sync_init() != 0) {
- //   LOG_WRN("Board sync initialization failed - inter-board sync disabled");
- //} else {
- //   LOG_INF("Board sync initialized");
-  //}
+  //  if (board_sync_init() != 0) {
+  //   LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+  //} else {
+  //   LOG_INF("Board sync initialized");
+    //}
 
+
+  */
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
     //gpio_pin_set_dt(&ppg_sync_gpio, 1);

@@ -53,6 +53,7 @@ extern struct k_sem spi_nrf_esp_transfer_done;
  * by process_esp_data() after reading.
  */
 extern bool esp_data_ready;
+extern bool first_esp_data_ready; 
 
 /** @brief ESP32-C6 chip select GPIO spec (SPI_A, software-toggled) */
 extern const struct gpio_dt_spec esp_cs_gpio;

@@ -166,7 +166,7 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
             return ret;
     }
 
-        // check if expected received header and tailer are correct
+    // check if expected received header and tailer are correct
     if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
             LOG_ERR("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
                 spi_rx_buf[0], ESP_SPI_HEADER, spi_rx_buf[send_len - 1], ESP_SPI_TAILER);
@@ -179,9 +179,27 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
     if(spi_rx_buf[2] == ESP_STOP_COMMAND){
         LOG_INF("Received ESP STOP command, resetting NRF-ESP communication state and waiting for stop sensor command");
         // reset state to idle to block sending data to ESP
-        nrf_esp_comm_state = NRF_ESP_IDLE; 
-        // stop command is enqueued in the 3rd byte
-        handle_connectivity_command(&spi_rx_buf[3], 1);
+        nrf_esp_comm_state = NRF_ESP_IDLE;
+        /* Save the opcode before spi_rx_buf gets reused below as the RX
+         * buffer for the ack transaction -- otherwise handle_connectivity_command()
+         * ends up dispatching whatever the ESP responded with to the ACK,
+         * not the original STOP request's opcode byte. */
+        uint8_t stop_opcode = spi_rx_buf[3];
+
+        // Explicitly acknowledge STOP with a dedicated transaction whose
+        // header byte has NRF_STOP_ACK_MASK set.
+        memset(spi_rx_buf, 0, send_len);
+        uint8_t dummy_buff[send_len];
+        memset(dummy_buff, 0, sizeof(dummy_buff));
+        dummy_buff[0] = ESP_SPI_HEADER | NRF_STOP_ACK_MASK; // set the ack bit in the header
+        dummy_buff[send_len - 1] = ESP_SPI_TAILER;
+
+        int ack_ret = spi_master_transceive(dummy_buff, spi_rx_buf, send_len);
+        if (ack_ret != 0) {
+            LOG_WRN("Failed to send STOP ack to ESP (ret=%d)", ack_ret);
+        }
+
+        handle_connectivity_command(&stop_opcode, 1);
     }
 
 

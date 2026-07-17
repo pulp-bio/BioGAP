@@ -96,6 +96,15 @@
 #define ESP_SPI_HEADER 0x66             // Header byte for every ESP <--> NRF transaction, to verify correct data parsing
 #define ESP_SPI_TAILER 0xBB             // Tailer byte for every ESP <--> NRF transaction, to verify correct data parsing
 
+/** @brief Bit 7 of a packet's header byte: set by the NRF on a dedicated
+ *  ack transaction (biogap_to_esp_transaction()) to explicitly confirm it
+ *  received and processed the ESP's piggybacked STOP marker. Checked by the
+ *  ESP against data it actually reads FROM the NRF (its rx_buffer), not its
+ *  own previously-stomped tx buffer -- see enter_stop_quiesce_state()
+ *  (espc6/components/biogap/source/biogap_read.c) for why that distinction
+ *  matters. */
+#define NRF_STOP_ACK_MASK 0x80
+
 #define ESP_PCKT_MAX_SIZE 820           // Set for now equal to the max size of WULPUS packets    
 #define ESP_SEND_QUEUE_SIZE 4           // Max number of packets that can be queued for sending to ESP. 
                                         // Adjust as needed based on expected traffic and memory constraints.     
@@ -113,6 +122,7 @@ typedef struct {
   uint8_t data[ESP_PCKT_MAX_SIZE];              // Packet data buffer
 } esp_packet_t;
 
+extern uint16_t esp_spi_packet_size; 
 typedef enum {
   NRF_ESP_IDLE,
   SEND_TO_ESP,
