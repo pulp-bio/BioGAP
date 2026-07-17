@@ -3,3 +3,6 @@ build/
 
 // Ignore any claude files
 *.claude
+
+// Ignore .vscode directory
+.vscode/
