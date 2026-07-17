@@ -51,11 +51,7 @@
 
 #define BIOGAP_READ_TAG "biogap_read_hs"
 
-#define PACKET_SZ NRF_EXG_PACKET_SIZE
-
-/* Ensure per-transaction packet size never exceeds configured SPI bus transfer cap */
-_Static_assert(PACKET_SZ <= SPI_FROM_BIOGAP_MAX_SIZE,
-               "NRF_EXG_PACKET_SIZE exceeds SPI_FROM_BIOGAP_MAX_SIZE");
+#define PACKET_SZ SPI_FROM_BIOGAP_MAX_SIZE
 
 // =============================================================================
 // GLOBALS FOR PRE-QUEUE PATTERN
@@ -124,14 +120,9 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
 // HELPER: Validate packet markers
 // =============================================================================
 /** @brief Check NRF_EXG_HEADER/TAILER framing on a received (RX) buffer. */
-static inline bool is_valid_packet(const uint8_t *data)
+static inline bool is_valid_packet(const uint8_t *data, const size_t packet_size)
 {
-    return (data[0] == NRF_EXG_HEADER && data[PACKET_SZ - 1] == NRF_EXG_TAILER);
-}
-/** @brief Check ESP_EXG_HEADER/TAILER framing on a transmitted (TX) buffer. */
-static inline bool is_valid_tx_packet(const uint8_t *data)
-{
-    return (data[0] == ESP_EXG_HEADER && data[PACKET_SZ - 1] == ESP_EXG_TAILER);
+    return (data[0] == NRF_EXG_HEADER && data[packet_size - 1] == NRF_EXG_TAILER);
 }
 
 /** @brief Free the DMA-capable TX/RX pre-queue buffers. */
@@ -175,6 +166,10 @@ esp_err_t allocate_prequeue_resources(void)
 
     memset(sendbuf_persistent, 0, PACKET_SZ);
     sendbuf_persistent[0] = ESP_EXG_HEADER;
+    // fill everything apart from header, first and second bytes with ESP_EXG_TAILER
+    for(uint16_t i=4;i<PACKET_SZ-1;i++){
+        sendbuf_persistent[i] = ESP_EXG_TAILER;
+    }
     sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
     sendbuf_persistent[1] = 0;
     sendbuf_persistent[2] = 0;
@@ -223,16 +218,16 @@ static esp_err_t enter_stop_quiesce_state(void)
         sendbuf_persistent[0] = ESP_EXG_HEADER;
         sendbuf_persistent[2] = ESP_STOP_COMMAND;
         sendbuf_persistent[3] = rx_gui_data_to_fwd[0];
-        sendbuf_persistent[PACKET_SZ - 1] = ESP_EXG_TAILER;
-
-        for (int i = 0; i < QUEUE_COUNT; i++) {
-            if (tx_bufs[i]) {
-                memcpy(tx_bufs[i], sendbuf_persistent, PACKET_SZ);
-            }
+        for(uint16_t i=4;i<PACKET_SZ-1;i++){
+            sendbuf_persistent[i] = ESP_EXG_TAILER;
         }
     }
 
-
+    for (int i = 0; i < QUEUE_COUNT; i++) {
+        if (tx_bufs[i]) {
+            memcpy(tx_bufs[i], sendbuf_persistent, PACKET_SZ);
+        }
+    }
     bool stop_delivered = false;
     uint8_t send_stop_command_count = 0;
     bool stop_ack_received = false;
@@ -322,7 +317,6 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 ESP_LOGI(BIOGAP_READ_TAG, "STOP command processed, returning to idle state"); 
                 first_read = true; 
                 continue;
-                  
             }
             continue; // jump to the top of the loop
         }
@@ -345,36 +339,22 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 }
 
                 size_t rx_bytes = (size_t)(ret_trans->trans_len / 8);
-                if (rx_bytes != PACKET_SZ) {
-                    ESP_LOGW(BIOGAP_READ_TAG,
-                            "SPI length mismatch: expected=%uB got=%uB ret_trans=%p tx_buf=%p tx=[%02X %02X %02X %02X]",
-                            (unsigned)PACKET_SZ,
-                            (unsigned)rx_bytes,
-                            (void *)ret_trans,
-                            (void *)ret_trans->tx_buffer,
-                            ((uint8_t *)ret_trans->tx_buffer)[0],
-                            ((uint8_t *)ret_trans->tx_buffer)[1],
-                            ((uint8_t *)ret_trans->tx_buffer)[2],
-                            ((uint8_t *)ret_trans->tx_buffer)[PACKET_SZ - 1]);
+                if(rx_bytes < 4){
+                    continue; // ignore empty packets 
                 }
-
                 uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
                 uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
-                /* Validate packet markers (header + tailer) */
-                if (!is_valid_packet(rx_data)) {
+
+                /* Validate packet markers (header + tailer) on what the NRF actually
+                 * sent. This is the only meaningful integrity check available: the
+                 * ESP's own echoed tx buffer has ESP_EXG_TAILER pre-filled at every
+                 * position from byte[3] onward (allocate_prequeue_resources()) so
+                 * that whatever send_len the NRF uses, its own header/tailer check
+                 * in biogap_to_esp_transaction() passes -- which also means a tx-side
+                 * check here would trivially pass regardless of transfer integrity. */
+                if (!is_valid_packet(rx_data, rx_bytes)) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
-                            rx_data[0], rx_data[PACKET_SZ - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
-                    break;
-                }
-                if (!is_valid_tx_packet(tx_data)) {
-                    ESP_LOGW(BIOGAP_READ_TAG,
-                        "Invalid packet: ret_trans=%p tx_buf=%p hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
-                        (void *)ret_trans,
-                        (void *)tx_data,
-                        tx_data[0],
-                        tx_data[PACKET_SZ - 1],
-                        ESP_EXG_HEADER,
-                        ESP_EXG_TAILER);
+                            rx_data[0], rx_data[rx_bytes - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
                     break;
                 }
 
@@ -387,7 +367,7 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                     ESP_LOGI(BIOGAP_READ_TAG, "First transaction done");
                     first_read = false;
                 }
-                ret = add_to_ringbuffer(rx_data, PACKET_SZ);
+                ret = add_to_ringbuffer(rx_data, rx_bytes);
                 if (ret != ESP_OK) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
                     xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
@@ -405,7 +385,7 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 /* Update the descriptor's TX buffer for its next transaction */
                 tx_counter++;  /* Advance transmit counter */
                 tx_data[0] = ESP_EXG_HEADER;
-                tx_data[PACKET_SZ - 1] = ESP_EXG_TAILER;
+                //tx_data[PACKET_SZ - 1] = ESP_EXG_TAILER;
                 tx_data[1] = tx_counter & 0xFF;  /* LSB of counter */
                 tx_data[2] = (tx_counter >> 8) & 0xFF;  /* MSB of counter */
 
