@@ -140,7 +140,7 @@ void tx_to_gui(void *pvParameters)
                 // int sent = 1; //hardcoded for now
                 if (sent < 0) {
                     // item will stay in the ringbuffer since we havent' return it yet. 
-                    ESP_LOGE(GUI_TAG, "Failed to send data to GUI");
+                    // ESP_LOGE(GUI_TAG, "Failed to send data to GUI"); 
                 }
                 else{
                     // remove the item from the ringbuffer only if it was sent successfully
