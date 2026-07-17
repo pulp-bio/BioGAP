@@ -30,6 +30,67 @@ components/led_strip/       status LED
 components/arduino/         vendored Arduino-as-component (used for led_strip only)
 ```
 
+## State machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> STATE_DISCONNECTED
+
+    STATE_DISCONNECTED --> STATE_IDLE: SPI handshake OK (B_BIOGAP_CONECTED)\n+ GUI TCP accepted (B_GUI_SOCKET_BIND)
+
+    STATE_IDLE --> STATE_STREAMING: START opcode from GUI\nDRDY pulse + 4B control frame\nB_START_CMD_FWD_TO_BIOGAP set
+
+    STATE_STREAMING --> STATE_STREAMING: NRF data transaction (211B,\npre-queued x4) -> ringbuffer -> tx_to_gui()
+
+    STATE_STREAMING --> STATE_IDLE: STOP opcode from GUI, or\nring buffer full (forced STOP)\n(enter_stop_quiesce_state)
+
+    note right of STATE_STREAMING
+        enter_stop_quiesce_state() (biogap_read.c):
+        1. stomp all pre-queued TX buffers with a
+           piggybacked STOP frame (opcode in byte[3])
+        2. poll completed transactions for the NRF's
+           explicit ACK (header | NRF_STOP_ACK_MASK)
+        3. reset_spi_bus_for_restart(): free DMA
+           buffers, reinit SPI slave bus
+        4. prepare_for_restart(): flush ring buffer,
+           clear STOP/START event bits
+    end note
+
+    note right of STATE_IDLE
+        Next START (send_to_biogap_task...):
+        1. propagate_first_start_command_to_biogap_master()
+           - DRDY pulse + 4B control frame first
+        2. only once that succeeds:
+           allocate_prequeue_resources() for the
+           211B DMA buffers, then the read task's
+           own prequeue_transactions() queues them
+    end note
+```
+
+### STOP handshake detail (ESP <-> nRF)
+
+```mermaid
+sequenceDiagram
+    participant GUI as BioGUI
+    participant ESP as ESP32 (SPI slave)
+    participant NRF as nRF5340 (SPI master)
+
+    GUI->>ESP: STOP opcode (TCP)
+    ESP->>ESP: enter_stop_quiesce_state():<br/>stomp sendbuf_persistent + all tx_bufs[i]<br/>with [ESP_EXG_HEADER, _, ESP_STOP_COMMAND, opcode, ESP_EXG_TAILER]
+    NRF->>NRF: sends its next regular 211B data transaction<br/>(unaware STOP was requested yet)
+    ESP-->>NRF: responds with the stomped buffer (piggybacked STOP)
+    NRF->>NRF: biogap_to_esp_transaction(): sees ESP_STOP_COMMAND,<br/>sets nrf_esp_comm_state = NRF_ESP_IDLE,<br/>saves opcode, dispatches handle_connectivity_command()
+    NRF->>ESP: dedicated ACK transceive:<br/>header = ESP_SPI_HEADER | NRF_STOP_ACK_MASK
+    ESP->>ESP: confirm loop sees the ACK bit in rx_buffer[0]<br/>(data NRF actually sent, not ESP's own tx buffer)<br/>-> stop_ack_received = true
+    ESP->>ESP: reset_spi_bus_for_restart() + prepare_for_restart()
+    ESP-->>GUI: (implicitly) ready for next START
+```
+
+The ACK step exists because inspecting the ESP's own previously-stomped `tx_buffer`
+after the transaction completes can't distinguish a genuine delivery from a torn write
+(if the stomp raced an in-flight DMA transfer) -- checking `rx_buffer` is checking data
+that unambiguously came from the NRF.
+
 ## Code workflow
 
 ### 1. Boot (`main/main.c`)
@@ -71,13 +132,22 @@ nRF blocks on `B_BIOGAP_CONECTED` before doing anything.
 2. `rx_from_gui()` receives it and calls `parse_gui_command()` (`gui_utils.c`), which
    validates the opcode via `validate_command()` and, in `STATE_IDLE`, accepts only
    START-type commands: sets `rx_gui_data_to_fwd[0]` and `B_START_CMD_RCV`.
-3. `send_to_biogap_task_nrf_master_esp_slave()` wakes on `B_START_CMD_RCV`, pulses the
-   DRDY GPIO (`data_ready_pulse()`, 100 us high pulse via `NRF_ESP_DATA_READY`) to tell
-   the nRF "I have something for you", then blocks in
-   `send_first_start_command_to_biogap_master()` on `spi_slave_transmit()` of a 4-byte
-   control frame (`ESP_SPI_HEADER 0x66, <opcode>, 0x00, ESP_SPI_TAILER 0xBB`) until the
-   nRF's DRDY interrupt fires and it initiates the matching master transaction.
-4. On success: `B_START_CMD_FWD_TO_BIOGAP` set, `node_state = STATE_STREAMING`.
+3. `send_to_biogap_task_nrf_master_esp_slave()` wakes on `B_START_CMD_RCV` and calls
+   `propagate_first_start_command_to_biogap_master()`: pulses the DRDY GPIO
+   (`data_ready_pulse()`, 100 us high pulse via `NRF_ESP_DATA_READY`) to tell the nRF "I
+   have something for you", then blocks in `send_first_start_command_to_biogap_master()`
+   on `spi_slave_transmit()` of a 4-byte control frame (`ESP_SPI_HEADER 0x66, <opcode>,
+   0x00, ESP_SPI_TAILER 0xBB`) until the nRF's DRDY interrupt fires and it initiates the
+   matching master transaction. This is the *same* mechanism and control-frame format
+   for every START (first session or a later one after a STOP) — no special-casing.
+4. Only once that control frame is confirmed delivered does it call
+   `allocate_prequeue_resources()`, allocating the 211-byte DMA buffers for the
+   upcoming streaming session (deliberately deferred until after the 4-byte transaction
+   succeeds, not before). On success: `B_START_CMD_FWD_TO_BIOGAP` set,
+   `node_state = STATE_STREAMING`.
+5. `read_from_biogap_task_nrf_master_esp_slave_prequeue()`, unblocked by
+   `B_START_CMD_FWD_TO_BIOGAP`, sees `!prequeued` and calls `prequeue_transactions()` to
+   actually queue the `QUEUE_COUNT` (4) DMA descriptors onto the now-allocated buffers.
 
 ### 4. nRF -> GUI data path (streaming)
 
@@ -94,32 +164,46 @@ nRF blocks on `B_BIOGAP_CONECTED` before doing anything.
 
 ### 5. STOP path
 
-The ESP (slave) cannot push data to the nRF (master) unilaterally, so STOP is delivered
-by *piggybacking* on the next regular data-transaction response instead of a dedicated
-transfer:
+The ESP (slave) cannot push data to the nRF (master) unilaterally, so the STOP
+*request* is delivered by piggybacking on the next regular data-transaction response;
+the nRF then sends an explicit dedicated *acknowledgment* transaction back, so the ESP
+has a real confirmation instead of just trusting its own previously-written buffer. See
+the sequence diagram above for the full picture. In code:
 
 1. GUI sends a STOP-type opcode while `node_state == STATE_STREAMING`;
    `parse_gui_command()` sets `B_STOP_CMD_RPT_PENDING`.
-2. `rx_from_gui()` promotes this to `B_STOP_CMD_RCV_GUI`, then calls
-   `prepare_for_restart()` (or `prepare_for_restart_local_dummy()` in local-dummy mode).
-3. `read_from_biogap_task_nrf_master_esp_slave_prequeue()` sees `B_STOP_CMD_RCV_GUI` (or
-   `B_STOP_CMD_RCV_FORCED`, set instead if the ring buffer overflows) and calls
-   `enter_stop_quiesce_state()`: under the SPI bus lock, it stomps `sendbuf_persistent`
-   and every pre-queued `tx_bufs[i]` with a STOP frame
-   (`ESP_EXG_HEADER, _, ESP_STOP_COMMAND, <opcode>` at `PACKET_SZ` bytes with
-   `ESP_EXG_TAILER`), drains the in-flight transaction, then sets `B_SPI_QUIESCED` and
-   `node_state = STATE_IDLE`.
-4. `send_to_biogap_task_nrf_master_esp_slave()` wakes on `B_SPI_QUIESCED` and sets
-   `B_STOP_CMD_FWD_TO_BIOGAP`.
-5. `prepare_for_restart()` (blocked on `B_STOP_CMD_FWD_TO_BIOGAP`) frees the pre-queue
-   DMA buffers, re-initializes the SPI slave bus, soft-flushes `biogap_ringbuf`
-   (`rb_soft_flush()`), re-allocates pre-queue resources, and clears the STOP/START
-   event bits — leaving the system idle and ready for the next START from BioGUI.
+2. `rx_from_gui()` promotes this to `B_STOP_CMD_RCV_GUI` (or, on a ring-buffer overflow,
+   the read task itself sets `B_STOP_CMD_RCV_FORCED` directly). It does **not** call
+   any restart/cleanup function itself — `enter_stop_quiesce_state()` (below) is the
+   sole owner of that sequence, to avoid two tasks racing through
+   free/reinit/allocate on the same SPI bus.
+3. `read_from_biogap_task_nrf_master_esp_slave_prequeue()` sees `B_STOP_CMD_RCV_GUI` /
+   `B_STOP_CMD_RCV_FORCED` and calls `enter_stop_quiesce_state()`:
+   - Stomps `sendbuf_persistent` and every pre-queued `tx_bufs[i]` with a STOP frame
+     (`ESP_EXG_HEADER, _, ESP_STOP_COMMAND, <opcode>` at `PACKET_SZ` bytes with
+     `ESP_EXG_TAILER`).
+   - Polls completed transactions (`spi_slave_get_trans_result()`) checking
+     `rx_buffer[0]` (what the NRF actually transmitted) for `NRF_STOP_ACK_MASK` set on
+     top of `ESP_SPI_HEADER` — the NRF's explicit "I got your STOP and processed it"
+     signal (see `biogap_to_esp_transaction()`, NRF side, below).
+   - Once acknowledged (or on timeout — see Known issues), sets `B_SPI_QUIESCED`,
+     `node_state = STATE_IDLE`, `prequeued = false`, then calls
+     `reset_spi_bus_for_restart()` (frees the DMA buffers, tears down and
+     reinitializes the SPI slave bus — safe now that the NRF is confirmed idle) and
+     `prepare_for_restart()` (soft-flushes `biogap_ringbuf`, clears the STOP/START
+     event bits) directly, itself.
+4. On the NRF side, `biogap_to_esp_transaction()` (`wifi_sd_spi_functions.c`) detects
+   `ESP_STOP_COMMAND` in the ESP's piggybacked response, sets
+   `nrf_esp_comm_state = NRF_ESP_IDLE`, saves the opcode byte, sends the dedicated ACK
+   transceive (header `ESP_SPI_HEADER | NRF_STOP_ACK_MASK`), and only then dispatches
+   `handle_connectivity_command()` with the saved opcode (e.g. `STOP_DUMMY_STREAMING`
+   -> `dummy_sensor_stop_streaming()`).
 
 ### State machine (`common.h`)
 
 `node_state_t`: `STATE_DISCONNECTED` -> `STATE_IDLE` (handshake + GUI socket bound) ->
-`STATE_STREAMING` (START forwarded) -> back to `STATE_IDLE` on STOP.
+`STATE_STREAMING` (START forwarded) -> back to `STATE_IDLE` on STOP. See the diagrams
+above for the full annotated flow.
 
 ### Event bits (`g_evt`, see `common.h` for the full list)
 
@@ -132,8 +216,10 @@ Key bits: `B_BIOGAP_CONECTED`, `B_WIFI_CONNECTED`, `B_GUI_SOCKET_BIND`,
 
 | Frame type | Header | Tailer | Size | Notes |
 |---|---|---|---|---|
-| ESP -> nRF control (commands) | `0x66` (`ESP_SPI_HEADER`) | `0xBB` (`ESP_SPI_TAILER`) | 4 bytes | opcode at byte[1] (START) or STOP-piggyback at byte[2]/[3] |
+| ESP -> nRF control (commands) | `0x66` (`ESP_SPI_HEADER`) | `0xBB` (`ESP_SPI_TAILER`) | 4 bytes | opcode at byte[1] (START) |
 | nRF -> ESP data | `0x55` (`NRF_EXG_HEADER`) | `0xAA` (`NRF_EXG_TAILER`) | 211 bytes (`NRF_EXG_PACKET_SIZE`) | real ExG and dummy-sensor packets share this format |
+| ESP -> nRF piggybacked STOP request | `0x66` (`ESP_EXG_HEADER`) | `0xBB` (`ESP_EXG_TAILER`) | 211 bytes (`PACKET_SZ`) | `ESP_STOP_COMMAND` (245) at byte[2], real opcode at byte[3] — overwrites a regular streaming response buffer rather than a dedicated transfer |
+| nRF -> ESP STOP acknowledgment | `ESP_SPI_HEADER \| NRF_STOP_ACK_MASK` (`0x66 \| 0x80`) | `0xBB` (`ESP_SPI_TAILER`) | 211 bytes (`send_len`) | dedicated transceive the NRF sends after fully processing the piggybacked STOP request |
 | Handshake (ESP TX) | `0x5A` x4 (`HANDSHAKE_MARKER`) | - | 4 bytes | expects `0xA5` x4 (`HANDSHAKE_RESPONSE_MARKER`) echoed back |
 
 Command opcodes are in `connectivity_commands.h` and must stay in sync with
@@ -185,7 +271,7 @@ firmware implements.
 | `IS_WBAN` | 0 | Multi-node WBAN accept-loop mode (not yet implemented, `main.c` has a stubbed-out call site). |
 | `IS_ESP_SPI_SLAVE` | 1 | ESP is always the SPI slave, nRF the master. No other mode is currently supported end-to-end. |
 | `ESP_ENABLE_SD_WRITE` | 0 | Enable the SD-card write task (`sd_card_task`), competes with `tx_to_gui()` for the same ring buffer — leave off unless actively testing SD write. |
-| `ESP_LOCAL_DUMMY_SENSOR` | 0 | When 1, bypasses SPI/nRF entirely: the ESP generates synthetic dummy-sensor packets locally (`dummy_sensor_local.c`, byte-identical wire format to the nRF's `dummy_sensor_appl.c`) and streams them straight to BioGUI. Useful for testing the WiFi/GUI half in isolation with no nRF/SPI hardware attached. When 0 (real integration), the SPI/handshake bring-up in `main.c` runs and the real SPI read/send tasks are created instead. |
+| `ESP_LOCAL_DUMMY_SENSOR` | 0 | When 1, bypasses SPI/nRF entirely: the ESP generates synthetic dummy-sensor packets locally (`dummy_sensor_local.c`, byte-identical wire format to the nRF's `dummy_sensor_appl.c`) and streams them straight to BioGUI. Useful for testing the WiFi/GUI half of the system in isolation, with no nRF/SPI hardware attached. When 0 (real integration), the SPI/handshake bring-up in `main.c` runs and the real SPI read/send tasks are created instead. |
 
 ## WiFi / TCP
 
@@ -193,13 +279,34 @@ firmware implements.
   `EXAMPLE_ESP_WIFI_PASS`, channel `EXAMPLE_ESP_WIFI_CHANNEL`.
 - BioGUI connects as a TCP client to `192.168.4.1:4444` (`PORT_LAPTOP`), the ESP's
   default SoftAP gateway address. Single connection only (`accept()` is called once;
-  see Known limitations).
+  see Known issues).
 - `PORT_ESP_NODE` (3333) is reserved for the unimplemented `IS_WBAN` multi-node mode.
 
-## Known limitations / not yet implemented
+## Known issues / not yet implemented
 
-- `bind_to_gui()` accepts exactly one TCP connection with no reconnect loop; a second
-  BioGUI connection after the first closes currently requires a power cycle.
+Actively being worked on:
+
+- **STOP confirm loop doesn't re-queue non-matching reaps** (`enter_stop_quiesce_state()`,
+  `biogap_read.c`): each transaction reaped while waiting for the NRF's ACK is
+  permanently consumed rather than re-queued. With only `QUEUE_COUNT` (4) descriptors,
+  if more than 4 regular transactions complete before the ACK arrives — increasingly
+  likely at high sample rates (e.g. ~1ms sensor period, ~250x the original ~400ms
+  cadence) — the SPI slave queue can run dry before the ACK is ever seen, and the
+  NRF's next transaction then reads back `0xFF/0xFF` and halts.
+- **`tx_to_gui()` leaks ring-buffer space on `send()` failure** (`gui_task.c`): on a
+  failed `send()` to the GUI socket, the already-dequeued `xRingbufferReceive()` item is
+  never returned via `vRingbufferReturnItem()` (the code comments assume it "stays in
+  the ring buffer," but it's already been dequeued). Repeated send failures (WiFi
+  congestion, GUI not draining fast enough) leak ring-buffer space until
+  `add_to_ringbuffer()` starts failing, which forces a STOP (`B_STOP_CMD_RCV_FORCED`)
+  and can cascade into the issue above.
+
+Other known limitations:
+
+- `bind_to_gui()` creates a brand-new listening socket for every session rather than
+  binding/listening once at boot; there's a short window between the old connection
+  closing and the new `listen()` call where a client's connection attempt gets
+  "Connection refused." BioGUI's own retry button covers this today.
 - The malformed/misframed-packet path in `biogap_read.c`'s main streaming loop calls
   `break` (kills the read task) rather than logging and continuing — a single corrupted
   SPI transaction can currently take down streaming.

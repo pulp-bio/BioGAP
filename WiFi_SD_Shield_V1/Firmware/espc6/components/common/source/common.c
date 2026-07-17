@@ -1,12 +1,8 @@
 #include "common.h"
 #include "esp_log.h"
 #include "biogap.h"
-#include "sd_main.h"
 
 static const char *COMMON_TAG = "[common.c]: ";
-
-
-
 
 // Track current SPI bus mode for safe mode switching
 spi_mode_t current_spi_mode = SPI_MODE_IDLE;
@@ -38,8 +34,6 @@ esp_err_t init_nrf_spi_master_esp_slave_bus(void)
         .spics_io_num = NRF_ESP_CS,
         .queue_size = 10,            // sets how many transactions can be in the air. Must be higher for larger transaction intervals
         .flags = 0
-        // .post_setup_cb = my_post_setup_cb,
-        // .post_trans_cb = my_post_trans_cb
     };
 
     // Initialize SPI slave interface
@@ -81,9 +75,6 @@ esp_err_t config_spi_nrf_master_esp_slave_pins(void){
     }
 
     // Configure the DRDY_DIR_CTRL pin (IC5, dedicated DRDY level-translator channel).
-    // DRDY is a fixed-direction signal, always ESP -> NRF, regardless of which side
-    // is the SPI master. Per the shield schematic, DIR HIGH = A(ESP) -> B(NRF) on
-    // this transceiver, so this must be permanently driven HIGH.
     gpio_config_t io_conf_dir_ctrl = {
         .pin_bit_mask = (1ULL << NRF_ESP_DRDY_DIR_CTRL),
         .mode = GPIO_MODE_OUTPUT,
@@ -103,10 +94,8 @@ esp_err_t config_spi_nrf_master_esp_slave_pins(void){
     }
 
     // Configure the DIR_CTRL pin (IC2, MOSI/MISO/CS/CLK level-translator channels).
-    // Unlike DRDY_DIR_CTRL, this one's polarity depends on which side is SPI master:
-    // LOW routes MOSI/CS/CLK as NRF(B) -> ESP(A) and, via IC7's inverter feeding the
-    // MISO channel's DIR pin, gives MISO the opposite (ESP(A) -> NRF(B)) -- the
-    // correct combination for "NRF is master" (our only supported mode today).
+    // The polarity depends on which side is SPI master. If the NRF is SPI master:
+    // LOW routes MOSI/CS/CLK as NRF(B) -> ESP(A), MISO as ESP(A) -> NRF(B) 
     gpio_config_t io_conf_spi_dir_ctrl = {
         .pin_bit_mask = (1ULL << NRF_ESP_DIR_CTRL),
         .mode = GPIO_MODE_OUTPUT,
@@ -117,8 +106,7 @@ esp_err_t config_spi_nrf_master_esp_slave_pins(void){
 
     ESP_ERROR_CHECK(gpio_reset_pin(NRF_ESP_DIR_CTRL));
     ESP_ERROR_CHECK(gpio_config(&io_conf_spi_dir_ctrl));
-
-    // LOW: NRF is master (ESP is slave), matching IS_ESP_SPI_SLAVE.
+    
     ret = gpio_set_level(NRF_ESP_DIR_CTRL, 0);
     if (ret!=ESP_OK){
         ESP_LOGE(COMMON_TAG, "Failed to set NRF/ESP SPI direction pin LOW: %s", esp_err_to_name(ret));

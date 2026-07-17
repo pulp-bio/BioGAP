@@ -25,23 +25,18 @@
 
 #include "biogap.h"
 #include "common.h"
-#include "led_app.h"
-
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdlib.h>
-
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_rom_sys.h"
-
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/ringbuf.h"
-
 #include "driver/gptimer.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"

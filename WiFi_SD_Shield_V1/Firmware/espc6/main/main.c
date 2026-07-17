@@ -2,14 +2,13 @@
 #include "esp_log.h"
 #include "softap_main.h"
 #include "gui_task.h"
-#include "sd_main.h"
 #include "biogap.h"
 #include "dummy_sensor_local.h"
 #include "common.h"
-#include "led_app.h"
 #include "driver/gpio.h"
 #include <stdio.h>
 #include <string.h>
+
 #define MAIN_TAG "[main.c]"
 
 RingbufHandle_t biogap_ringbuf = NULL; 
@@ -24,7 +23,7 @@ int64_t start_time = 0;
 void app_main()
 {
     esp_err_t ret= 0;
-    /* Initializations*/
+
 
     // Initialize the debugging GPIO 
     gpio_config_t io_conf = {0};
