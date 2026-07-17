@@ -22,16 +22,7 @@ add_custom_target(print_sensei_sdk_root ALL
     COMMENT "Printing SENSEI_SDK_ROOT at build time"
 )
 
-# NOTE: the CMake variable Zephyr's build system actually reads is
-# ZEPHYR_EXTRA_MODULES (not EXTRA_ZEPHYR_MODULES) -- must be FORCEd into the
-# cache so it's visible to find_package(Zephyr) below.
-set(ZEPHYR_EXTRA_MODULES "${SENSEI_SDK_ROOT}/NRF")
-set(ZEPHYR_EXTRA_MODULES "${ZEPHYR_EXTRA_MODULES}" CACHE STRING "Zephyr extra modules" FORCE)
-message(STATUS "ZEPHYR_EXTRA_MODULES: '${ZEPHYR_EXTRA_MODULES}'")
-
-if(NOT EXISTS "${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml")
-    message(FATAL_ERROR "Expected Zephyr module metadata at '${SENSEI_SDK_ROOT}/NRF/zephyr/module.yml' -- check SENSEI_SDK_ROOT")
-endif()
+list(APPEND EXTRA_ZEPHYR_MODULES "${SENSEI_SDK_ROOT}/NRF")
 
 # Configure the project
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
