@@ -36,7 +36,6 @@
  */
 
 /* Zephyr RTOS headers */
-#include <nrfx_spim.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/gpio.h>
@@ -45,6 +44,8 @@
 
 #include "afe/ads_defs.h"
 #include "afe/ads_spi.h"
+#include "afe/ads_spi_hw.h"
+#include "spi/spi_a.h"
 
 LOG_MODULE_REGISTER(ads_spi_hw, LOG_LEVEL_INF);
 
@@ -84,48 +85,6 @@ static const struct gpio_dt_spec gpio_dt_ads1298_a_dr = GPIO_DT_SPEC_GET(ADS_A_D
  * SPI Configuration
  *============================================================================*/
 
-/** @brief SPI interrupt priority level */
-#define SPI_INT_PRIO 1
-
-/*==============================================================================
- * Module Variables - Synchronization
- *============================================================================*/
-
-/**
- * @brief SPI bus mutex
- *
- * Protects SPI bus access from concurrent threads. Locked during SPI
- * transfers, unlocked when complete.
- */
-struct k_mutex spi_mutex;
-
-/**
- * @brief SPIM driver instance
- *
- * nrfx SPIM peripheral instance for ADS1298 communication.
- */
-nrfx_spim_t spim_inst = NRFX_SPIM_INSTANCE(SPIM_INST_IDX);
-
-/*==============================================================================
- * SPI Interrupt Handler
- *============================================================================*/
-
-/**
- * @brief SPIM driver interrupt handler
- *
- * Called by nrfx SPIM driver when SPI transfer completes. This handler:
- * 1. Deasserts chip select for both ADS devices
- * 2. Processes received data if in READ mode
- * 3. Constructs BLE packets from ADS/PPG/IMU data
- * 4. Sets flags to indicate transfer completion
- *
- * @param[in] p_event   Pointer to SPIM event structure
- * @param[in] p_context User context (unused)
- *
- * @note This function runs in interrupt context. Keep processing minimal.
- */
-static void spim_handler(nrfx_spim_evt_t const *p_event, void *p_context);
-
 /*==============================================================================
  * Private Functions - Interrupt Callbacks
  *============================================================================*/
@@ -156,11 +115,9 @@ static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint
  * @brief Initialize SPI peripheral and GPIO pins for ADS1298 communication
  *
  * Performs complete hardware initialization:
- * 1. Connects SPI interrupt handler
- * 2. Configures SPIM peripheral (4 MHz, Mode 1, MSB first)
- * 3. Initializes chip select pins for both ADS devices
- * 4. Initializes START pin for synchronized acquisition
- * 5. Creates SPI mutex for thread-safe access
+ * 1. Brings up the shared SPI_A bus (see spi/spi_a.h) if not already done
+ * 2. Initializes chip select pins for both ADS devices
+ * 3. Initializes START pin for synchronized acquisition
  *
  * SPI Mode 1 timing:
  * - CPOL = 0 (clock idle low)
@@ -170,25 +127,13 @@ static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint
  *       Errors are logged but not returned to allow graceful degradation.
  */
 void init_spi() {
-  nrfx_err_t status;
-  (void)status;
-
-#if defined(__ZEPHYR__)
-  IRQ_CONNECT(NRFX_IRQ_NUMBER_GET(NRF_SPIM_INST_GET(SPIM_INST_IDX)), SPI_INT_PRIO,
-               NRFX_SPIM_INST_HANDLER_GET(SPIM_INST_IDX), 0, 0);
-#endif
-
-  // ADS_A_CS_PIN
-  nrfx_spim_config_t spim_config = NRFX_SPIM_DEFAULT_CONFIG(SCK_PIN, MOSI_PIN, MISO_PIN, NRF_SPIM_PIN_NOT_CONNECTED);
-
-  spim_config.frequency = NRFX_MHZ_TO_HZ(4);
-  spim_config.mode = NRF_SPIM_MODE_1;
-  spim_config.bit_order = NRF_SPIM_BIT_ORDER_MSB_FIRST;
-  spim_config.irq_priority = SPI_INT_PRIO;
-
-  void *p_context = "Some context";
-  status = nrfx_spim_init(&spim_inst, &spim_config, spim_handler, p_context);
-  NRFX_ASSERT(status == NRFX_SUCCESS);
+  /* Bring up the shared SPI_A (SPIM4) peripheral. Safe to call even if
+   * another shield on SPI_A (e.g. WiFi/SD) already brought it up first --
+   * whichever consumer initializes first wins; nrfx_spim_init() is not
+   * called a second time here. */
+  if (init_spi_a_bus() != 0) {
+    return;
+  }
 
   // Initialize SPI CS pin for ADS A
   if (!device_is_ready(gpio_dt_ads1298_a_cs.port)) {
@@ -219,8 +164,6 @@ void init_spi() {
     LOG_ERR("ADS pwr GPIO init error");
     return;
   }
-
-  k_mutex_init(&spi_mutex);
 }
 
 /*==============================================================================
@@ -312,21 +255,19 @@ uint8_t pr_word[10] = {_RESET, 0, 0, 0, 0, 0, 0, 0, 0, 0};
  */
 bool ads_initialized = false;
 
-static void spim_handler(nrfx_spim_evt_t const *p_event, void *p_context) {
-  LOG_DBG("spim_handler called, event type: %d", p_event->type);
-  
-  if (p_event->type == NRFX_SPIM_EVENT_DONE) {
-    if (gpio_pin_set_dt(&gpio_dt_ads1298_a_cs, 0) < 0) { // Set CS pin to disable
-      LOG_ERR("ADS1298 power GPIO set error");
-      return;
-    }
-    if (gpio_pin_set_dt(&gpio_dt_ads1298_b_cs, 0) < 0) { // Set CS pin to disable
-      LOG_ERR("ADS1298 power GPIO set error");
-      return;
-    }
+void ads_spim_transfer_complete(void) {
+  LOG_DBG("ads_spim_transfer_complete called");
 
-    ads_spim_handler_done();
+  if (gpio_pin_set_dt(&gpio_dt_ads1298_a_cs, 0) < 0) { // Set CS pin to disable
+    LOG_ERR("ADS1298 power GPIO set error");
+    return;
   }
+  if (gpio_pin_set_dt(&gpio_dt_ads1298_b_cs, 0) < 0) { // Set CS pin to disable
+    LOG_ERR("ADS1298 power GPIO set error");
+    return;
+  }
+
+  ads_spim_handler_done();
 }
 
 static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {

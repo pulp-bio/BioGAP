@@ -38,6 +38,9 @@
 #include "sensors/imu/imu_appl.h"
 #include "ble/ble_appl.h"
 #include "sensors/imu/lsm6dsv16bx_sensor.h"
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
 #include "core/sync_streaming.h"
 
 #include <zephyr/kernel.h>
@@ -147,8 +150,12 @@ static void imu_packet_add_sample(const int16_t accel[3], const int16_t gyro[3])
     /* Add trailer */
     imu_tx_buf[imu_buf_idx++] = IMU_DATA_TRAILER;
 
-    /* Send packet via BLE queue */
+    /* Send packet via BLE or WiFi/SD shield queue */
+#if defined(CONFIG_WI_FI)
+    add_data_to_esp_send_buffer(imu_tx_buf, IMU_PCKT_SIZE);
+#else
     add_data_to_send_buffer(imu_tx_buf, IMU_PCKT_SIZE);
+#endif
 
     /* Reset for next packet */
     imu_packet_init();

@@ -295,7 +295,7 @@ static void wulpus_spi_thread(void *a, void *b, void *c)
         if (buffer_counter == WULPUS_MAX_FRAMES) {
             buffer_counter = 0;
         }
-
+        //LOG_INF("WULPUS SPI done, give BLE ready sem");
         k_sem_give(&wulpus_ble_ready_sem);
     }
 }
@@ -347,7 +347,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
-    LOG_INF("WULPUS BLE thread started");
+    //LOG_INF("WULPUS BLE thread started");
 
     uint8_t ble_packet[WULPUS_BLE_PKT_SIZE];
     /* Zero once. The header [0], metadata [1..6] and SPI payload [7..207] are
@@ -357,6 +357,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
     while (1) {
         k_sem_take(&wulpus_ble_ready_sem, K_FOREVER);
 
+        //LOG_INF("WULPUS BLE ready, processing frames");
         while (current_buffer != buffer_counter) {
             int base = current_buffer * WULPUS_NUMBER_OF_XFERS;
 
@@ -368,6 +369,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
             uint32_t ts_us = m_frame_ts[current_buffer];
             ble_packet[WULPUS_META_CNT_OFF]     = (uint8_t)(wulpus_frame_counter);
             ble_packet[WULPUS_META_CNT_OFF + 1] = (uint8_t)(wulpus_frame_counter >> 8);
+            //LOG_INF("WULPUS frame %d, timestamp %u us", wulpus_frame_counter, ts_us);
             ble_packet[WULPUS_META_TS_OFF]      = (uint8_t)(ts_us);
             ble_packet[WULPUS_META_TS_OFF + 1]  = (uint8_t)(ts_us >> 8);
             ble_packet[WULPUS_META_TS_OFF + 2]  = (uint8_t)(ts_us >> 16);

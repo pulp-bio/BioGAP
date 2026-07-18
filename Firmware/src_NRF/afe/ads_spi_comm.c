@@ -43,6 +43,7 @@
 #include "afe/ads_defs.h"
 #include "afe/ads_spi_hw.h"
 #include "afe/ads_spi_data.h"
+#include "spi/spi_a.h"
 
 LOG_MODULE_REGISTER(ads_spi_comm, LOG_LEVEL_INF);
 
@@ -127,24 +128,22 @@ static int ads_chip_select(ads_device_id_t ads_id) {
  * @note CS is asserted by this function and deasserted by interrupt handler
  */
 int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
-  extern struct k_mutex spi_mutex;
-  extern nrfx_spim_t spim_inst;
-
   unsigned int key = irq_lock(); // Disable all interrupts
-  k_mutex_lock(&spi_mutex, K_FOREVER);
+  k_mutex_lock(&spi_a_mutex, K_FOREVER);
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(pr_word, size, ads_rx_buf, size);
 
   if (ads_chip_select(ads_id) < 0) {
-    k_mutex_unlock(&spi_mutex);
+    k_mutex_unlock(&spi_a_mutex);
     irq_unlock(key);
     return -1;
   }
 
+  spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
   nrfx_err_t status;
-  status = nrfx_spim_xfer(&spim_inst, &spim_xfer_desc, 0);
+  status = nrfx_spim_xfer(&spi_a_inst, &spim_xfer_desc, 0);
   NRFX_ASSERT(status == NRFX_SUCCESS);
 
-  k_mutex_unlock(&spi_mutex);
+  k_mutex_unlock(&spi_a_mutex);
   irq_unlock(key); // Restore interrupts
 
   return 0;
@@ -168,23 +167,21 @@ int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
  * @note empty_buffer contains zeros for dummy TX bytes
  */
 int ads1298_read_samples(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
-  extern struct k_mutex spi_mutex;
-  extern nrfx_spim_t spim_inst;
-
   unsigned int key = irq_lock(); // Disable all interrupts
-  k_mutex_lock(&spi_mutex, K_FOREVER);
+  k_mutex_lock(&spi_a_mutex, K_FOREVER);
 
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(empty_buffer, size, ads_rx_buf, size);
   if (ads_chip_select(ads_id) < 0) {
-    k_mutex_unlock(&spi_mutex);
+    k_mutex_unlock(&spi_a_mutex);
     irq_unlock(key);
     return -1;
   }
 
+  spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
   nrfx_err_t status;
-  status = nrfx_spim_xfer(&spim_inst, &spim_xfer_desc, 0);
+  status = nrfx_spim_xfer(&spi_a_inst, &spim_xfer_desc, 0);
   NRFX_ASSERT(status == NRFX_SUCCESS);
-  k_mutex_unlock(&spi_mutex);
+  k_mutex_unlock(&spi_a_mutex);
   irq_unlock(key); // Restore interrupts
 
   return 0;
@@ -207,22 +204,28 @@ int ads1298_read_samples(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
  * @note Transfer is non-blocking; poll spi_xfer_done for completion
  */
 int ads1298_write_spi(uint8_t size, ads_device_id_t ads_id) {
-  extern struct k_mutex spi_mutex;
-  extern nrfx_spim_t spim_inst;
-
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(pr_word, sizeof(pr_word), ads_rx_buf, sizeof(ads_rx_buf));
   nrfx_err_t status;
 
+  unsigned int key = irq_lock(); // Disable all interrupts
+  k_mutex_lock(&spi_a_mutex, K_FOREVER);
+
   if (ads_chip_select(ads_id) < 0) {
+    k_mutex_unlock(&spi_a_mutex);
+    irq_unlock(key);
     return -1;
   }
 
   LOG_DBG("Starting SPI write transfer");
-  status = nrfx_spim_xfer(&spim_inst, &spim_xfer_desc, 0);
+  spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
+  status = nrfx_spim_xfer(&spi_a_inst, &spim_xfer_desc, 0);
   LOG_DBG("Status: %d", status);
   LOG_DBG("SPI write transfer started");
   NRFX_ASSERT(status == NRFX_SUCCESS);
   LOG_DBG("SPI write transfer asserted CS");
+
+  k_mutex_unlock(&spi_a_mutex);
+  irq_unlock(key); // Restore interrupts
 
   return 0;
 }

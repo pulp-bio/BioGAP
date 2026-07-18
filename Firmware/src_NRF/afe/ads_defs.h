@@ -95,23 +95,11 @@
 /*==============================================================================
  * SPIM Instance Configuration
  *
- * The ADS1298 sits on SPI_A of the BioGAP mainboard, driven by SPIM4 —
- * the nRF5340's dedicated high-speed instance (up to 32 MHz on these
- * pins). Pin numbers must match the spi_a_default pinctrl in the board
- * DTS (nrf5340_senseiv1_cpuapp.dts).
+ * The ADS1298 sits on SPI_A of the BioGAP mainboard -- a bus shared with
+ * other shields (e.g. WiFi/SD). The peripheral instance, pins, and
+ * initialization now live in spi/spi_a.h / spi/spi_a.c, since bringing up
+ * SPI_A is no longer an ADS-specific concern.
  *============================================================================*/
-
-/** @brief SPIM instance index to be used for ADS1298 communication (SPI_A) */
-#define SPIM_INST_IDX 4
-
-/** @brief MOSI pin number for SPI communication (SPI_A_MOSI = P0.09) */
-#define MOSI_PIN 9
-
-/** @brief MISO pin number for SPI communication (SPI_A_MISO = P0.10) */
-#define MISO_PIN 10
-
-/** @brief SCK (clock) pin number for SPI communication (SPI_A_CLK = P0.08) */
-#define SCK_PIN 8
 
 /*==============================================================================
  * ADS1298 SPI Command Definitions

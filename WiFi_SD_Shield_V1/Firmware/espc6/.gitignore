@@ -1,0 +1,8 @@
+// Ignore build directories and temporary files
+build/
+
+// Ignore any claude files
+*.claude
+
+// Ignore .vscode directory
+.vscode/

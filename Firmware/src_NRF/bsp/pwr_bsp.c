@@ -160,7 +160,7 @@ int pwr_charge_enable()
     
     pmic_conf->charger_enabled = true;           // Enable charger
     pmic_conf->preq_i = MAX77654_I_PQ_20PERCENT; // Pre-qual current ~5mA (20% of 22.5mA)
-    pmic_conf->chgin_i_lim = MAX77654_ICHGIN_LIM_0A285; // Input current limit 285mA
+    pmic_conf->chgin_i_lim = MAX77654_ICHGIN_LIM_0A475; // Input current limit 285mA
     pmic_conf->fast_chg_cc = MAX77654_CHG_CC_90MA; // Fast charge current 22.5mA
     pmic_conf->fast_chg_cv = MAX77654_CHG_CV_4V2; // Charge voltage 4.2V
     pmic_conf->termnation_i = MAX77654_I_TERM_10PERCENT; // Term current ~2.25mA
