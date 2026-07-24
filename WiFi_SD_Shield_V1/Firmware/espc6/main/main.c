@@ -99,7 +99,7 @@ void app_main()
 
 
     uint8_t handshake_attempts = 0;
-    while (handshake_attempts < 3) {
+    while (handshake_attempts < 1) {
     //while(1){
         ret = initial_handshake_nrf_master_esp_slave_pq();
         if (ret == 0) {
@@ -191,24 +191,6 @@ void app_main()
     xEventGroupSetBits(g_evt, B_GUI_SOCKET_BIND);
     node_state = STATE_IDLE;
     ESP_LOGI(MAIN_TAG, "WiFi initialized and bound to GUI successfully");
-
-    // // do another handshake with the NRF master after WiFi is up, to ensure that the SPI bus is still functional
-    // handshake_attempts = 0;
-    // while (handshake_attempts < 3) {
-    // //while(1){
-    //     ret = initial_handshake_nrf_master_esp_slave_pq();
-    //     if (ret == 0) {
-    //         //ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
-    //         ESP_LOGI(MAIN_TAG, "handshake num %d successful", handshake_attempts);
-    //         current_spi_mode = SPI_MODE_NRF;
-    //         handshake_attempts+=1; 
-    //         //break;
-    //     } else {
-    //         ESP_LOGE(MAIN_TAG, "Initial handshake failed, retrying in 1 second: %s", esp_err_to_name(ret));
-    //         vTaskDelay(pdMS_TO_TICKS(1000));
-    //     }
-    // }
-    
     // ========================== START ALL THE TASKS =============================
 
     BaseType_t xr = xTaskCreate(read_from_biogap_task_nrf_master_esp_slave_prequeue, "read_biogap_task_nrf_master", 4096, NULL, 1, &read_from_biogap_task_nrf_master_pq_esp_slave_handle);
