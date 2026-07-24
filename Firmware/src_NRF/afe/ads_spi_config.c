@@ -119,7 +119,7 @@ int ads_check_id(ads_device_id_t ads_id) {
             (ads_id == ADS1298_A) ? "A" : "B", ads_rx_buf[2]);
     return -EIO;
   }
-  LOG_DBG("ADS1298 id checked");
+  LOG_INF("ADS1298 id %s checked", (ads_id == ADS1298_A) ? "A" : "B");
   return 0;
 }
 

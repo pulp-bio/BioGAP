@@ -203,7 +203,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
   #if defined(CONFIG_DUMMY_SENSOR)
-    esp_spi_packet_size = DUMMY_SENSOR_PCKT_SIZE; // Set the expected SPI packet size for dummy sensor
+    //esp_spi_packet_size = DUMMY_SENSOR_PCKT_SIZE; // Set the expected SPI packet size for dummy sensor
     dummy_sensor_start_streaming();
   #else
     LOG_WRN("Dummy sensor not built (CONFIG_DUMMY_SENSOR=n) - ignoring START_DUMMY_STREAMING");
@@ -235,7 +235,10 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset BLE packet counters for new session */
   #else
-    /* TODO: reset WiFi transport packet counters */
+    if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+        LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+    }
+    nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
     eeg_start_streaming();
     break;
@@ -246,7 +249,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
-    /* TODO: print WiFi transport stats */
+    nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
   #endif
     break;
 
@@ -255,7 +258,10 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset packet counters for new session */
   #else
-    /* TODO: reset WiFi transport packet counters */
+    if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+        LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+    }
+    nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
     LOG_INF("Starting EMG streaming");
     emg_start_streaming();
@@ -267,7 +273,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
-    /* TODO: print WiFi transport stats */
+    nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
   #endif
     break;
 

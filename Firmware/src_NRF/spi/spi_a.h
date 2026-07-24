@@ -125,4 +125,13 @@ int init_spi_a_bus(void);
  */
 void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs);
 
+/**
+ * @brief Returns the current owner of SPI_A, or SPI_A_OWNER_NONE if idle
+ *
+ * Lets a consumer holding spi_a_mutex confirm no other consumer's transfer
+ * is still physically in flight before starting its own -- see
+ * spi_a_mutex's doc comment for why the mutex alone isn't sufficient.
+ */
+spi_a_owner_t spi_a_current_owner(void);
+
 #endif // SPI_A_H

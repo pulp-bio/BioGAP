@@ -82,7 +82,7 @@ ads_function_t ads_get_function(void) { return ads_function; }
  *       handled by the main loop or interrupt handlers.
  */
 void ads_set_function(ads_function_t f) { 
-    LOG_DBG("Setting ADS function to %d", f);
+    LOG_INF("Setting ADS function to %d", f);
     ads_function = f; 
 }
 

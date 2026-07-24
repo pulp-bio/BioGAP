@@ -65,6 +65,15 @@ LOG_MODULE_REGISTER(ads_spi_data, LOG_LEVEL_INF);
  */
 extern uint8_t ads_rx_buf[40];
 
+/**
+ * @brief Boolean to check if the ADS A and B have completed their transfers
+ *
+ * Read from ISR context by spi_a.c's shared completion handler, so must be
+ * volatile.
+ */
+volatile bool ads_a_and_b_done = true;
+
+
 /*==============================================================================
  * Module Variables - BLE Packet Construction
  *============================================================================*/
@@ -218,6 +227,7 @@ void ads_spim_handler_done(void) {
         ble_tx_buf[buf_current_size++] = BLE_PCK_TAILER;
 
 #if defined(CONFIG_WI_FI)
+        //LOG_INF("Adding data to ESP send buffer");
         add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #else
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
@@ -251,17 +261,20 @@ void ads_drdy_callback(void) {
  * Manages the complete data flow from ADS devices to BLE transmission.
  */
 void process_ads_data(void) {
-  // LOG_INF("Processing ADS data...");
+  //LOG_INF("Processing ADS data...");
   if (ads_data_ready) {
-    // LOG_INF("ADS DATA READY interrupt received");
+    //LOG_INF("ADS DATA READY interrupt received");
     // Clear flag first to avoid missing next interrupt
     ads_data_ready = false;
+    // clear the ADS A - B done flag
+    ads_a_and_b_done = false;
 
     // Process received data as needed
     if (ads_get_function() == ADS_READ) {
       if (!drdy_served) {
         ads_set_function(ADS_STOP);
-      } else {
+      } 
+      else {
         drdy_served = false;
 
         spi_xfer_done = false;
@@ -271,6 +284,11 @@ void process_ads_data(void) {
           ;
         spi_xfer_done = false;
         ads_to_read = ADS1298_B;
+        // Must be set before kicking off B, not after its busy-wait below:
+        // B's completion ISR (spi_a.c) reads this flag to release SPI_A's
+        // owner, and it can fire before this thread resumes.
+        ads_a_and_b_done = true;
+        //LOG_INF("ADS A and B set to true...");
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_B);
         while (spi_xfer_done == false)
           ;

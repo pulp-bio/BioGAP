@@ -71,11 +71,21 @@ void wifi_sd_spim_transfer_complete(void) {
  */
 int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
 {
+    
     if (len == 0) {
         return -EINVAL;
     }
 
     k_mutex_lock(&spi_a_mutex, K_FOREVER);
+
+    /* ADS releases spi_a_mutex right after kicking off a transfer, not once
+     * it physically completes. nrfx_spim_xfer() below would reprogram the
+     * same peripheral's DMA while that transfer is still in flight, so
+     * spin here (tens of microseconds, same order as an ADS transfer
+     * itself -- no sleep, same idiom as ads_spi_data.c's spi_xfer_done
+     * wait) until spi_a_current_owner() confirms ADS is really done. */
+    while (spi_a_current_owner() == SPI_A_OWNER_ADS)
+        ;
 
     /* Drain any stale completion before starting a new async transfer. */
     while (k_sem_take(&spi_nrf_esp_transfer_done, K_NO_WAIT) == 0) {

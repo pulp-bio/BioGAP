@@ -125,7 +125,7 @@ int main(void) {
 
 //  LOG_INF("Enabling charge...");
   pwr_charge_enable();
-
+  power_exg_on(0); 
   /* Start the SDK power thread: refreshes the battery/charger telemetry
    * cache every THREAD_PWR_UPDATE_PERIOD_MS (and on PMIC nIRQ) and
    * re-applies the charger config periodically. Runs at the lowest
@@ -150,7 +150,15 @@ int main(void) {
   LOG_INF("Powering GAP9...");
  // gap9_pwr(true);
   LOG_INF("GAP9 powered up");
-
+#if defined(CONFIG_SENSOR_EEG)
+  // Initialize EEG subsystem
+  LOG_INF("Initializing EEG subsystem...");
+  if (eeg_init() != 0) {
+    LOG_WRN("EEG initialization failed - EEG streaming disabled");
+  } else {
+    LOG_INF("EEG subsystem initialized");
+  }
+#endif
 #if defined(CONFIG_WI_FI)
   LOG_INF("Initializing Wi-Fi/SD shield...");
   ret = wifi_sd_shield_cs_init();
@@ -201,17 +209,9 @@ int main(void) {
  * bipolar rails) is selected at runtime by the GUI start command, and
  * simultaneous streaming is rejected in eeg/emg_start_streaming(). */
 
-/*
-#if defined(CONFIG_SENSOR_EEG)
-  // Initialize EEG subsystem
-  LOG_INF("Initializing EEG subsystem...");
-  if (eeg_init() != 0) {
-    LOG_WRN("EEG initialization failed - EEG streaming disabled");
-  } else {
-    LOG_INF("EEG subsystem initialized");
-  }
-#endif
 
+
+/*
 #if defined(CONFIG_SENSOR_EMG)
   // Initialize EMG subsystem
   LOG_INF("Initializing EMG subsystem...");
@@ -253,6 +253,16 @@ int main(void) {
 
 
   */
+  // sleep a bit
+  // k_sleep(K_MSEC(5000));
+  // ret = handshake2();
+  // if (ret != 0) {
+  //   LOG_ERR("Handshake2 with ESP32 failed - Wi-Fi communication not established");
+  // } else {
+  //   LOG_INF("Handshake2 with ESP32 successful");
+  // }
+
+  // do another handshake with the ESP now
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
     //gpio_pin_set_dt(&ppg_sync_gpio, 1);
