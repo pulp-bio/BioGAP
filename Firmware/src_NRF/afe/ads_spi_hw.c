@@ -126,43 +126,43 @@ static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint
  * @note This function must be called before any other ADS functions.
  *       Errors are logged but not returned to allow graceful degradation.
  */
-void init_spi() {
+int init_spi() {
   /* Bring up the shared SPI_A (SPIM4) peripheral. Safe to call even if
    * another shield on SPI_A (e.g. WiFi/SD) already brought it up first --
    * whichever consumer initializes first wins; nrfx_spim_init() is not
    * called a second time here. */
   if (init_spi_a_bus() != 0) {
-    return;
+    return -1;
   }
 
   // Initialize SPI CS pin for ADS A
   if (!device_is_ready(gpio_dt_ads1298_a_cs.port)) {
     LOG_ERR("ADS1298 power GPIO port not ready");
-    return;
+    return -1;
   }
   if (gpio_pin_configure_dt(&gpio_dt_ads1298_a_cs, GPIO_OUTPUT_INACTIVE) < 0) {
     LOG_ERR("ADS pwr GPIO init error");
-    return;
+    return -1;
   }
 
   // Initialize SPI CS pin for ADS B
   if (!device_is_ready(gpio_dt_ads1298_b_cs.port)) {
     LOG_ERR("ADS1298 power GPIO port not ready");
-    return;
+    return -1;
   }
   if (gpio_pin_configure_dt(&gpio_dt_ads1298_b_cs, GPIO_OUTPUT_INACTIVE) < 0) {
     LOG_ERR("ADS pwr GPIO init error");
-    return;
+    return -1;
   }
 
   // Initialize SPI START pin for synchronized start of ADS A and B
   if (!device_is_ready(gpio_dt_ads1298_start_pin.port)) {
     LOG_ERR("ADS1298 power GPIO port not ready");
-    return;
+    return -1;
   }
   if (gpio_pin_configure_dt(&gpio_dt_ads1298_start_pin, GPIO_OUTPUT_INACTIVE) < 0) {
     LOG_ERR("ADS pwr GPIO init error");
-    return;
+    return -1;
   }
 }
 

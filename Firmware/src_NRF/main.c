@@ -145,7 +145,13 @@ int main(void) {
   ret = ads_dr_init();
 
 //  LOG_INF("Initializing SPI...");
-  init_spi();
+  ret = init_spi();
+  if (ret != 0) {
+    LOG_ERR("SPI init failed");
+    //halt
+    //while(1){};
+
+  }
 
   LOG_INF("Powering GAP9...");
  // gap9_pwr(true);

@@ -163,7 +163,13 @@ void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
         esp_packet_t discard;
         k_msgq_get(&esp_send_msgq, &discard, K_NO_WAIT);
         ret = k_msgq_put(&esp_send_msgq, &packet, K_NO_WAIT);
-        LOG_WRN("ESP send queue full, dropped oldest packet");
+        LOG_ERR("ESP send queue full, dropped oldest packet");
+        // halt the system 
+        LOG_ERR("=== SPI FAILURE in add_data_to_esp_send_buffer - NRF53 HALTED ===");
+        while (1) 
+        {
+            k_sleep(K_FOREVER);
+        }
     }
     if (ret != 0) {
         LOG_ERR("Failed to enqueue data for ESP sending (err %d)", ret);
@@ -269,7 +275,7 @@ int initial_handshake_nrf_esp() {
                 k_sleep(K_MSEC(2000));
                 
                 
-                if (hs_completed == 3){
+                if (hs_completed == 1){
                     handshake_done = true;
                     
                     k_sem_give(&handshake_complete_sem);    // Signal sender thread to start

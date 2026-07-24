@@ -91,6 +91,16 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     while (k_sem_take(&spi_nrf_esp_transfer_done, K_NO_WAIT) == 0) {
     }
 
+    /* A plain runtime check, not #if: NRFX_MHZ_TO_HZ()'s expansion isn't
+     * guaranteed to be valid in a preprocessor constant expression (nrfx
+     * doesn't write its macros with #if-safety in mind), so comparing here
+     * instead of at compile time avoids relying on that. The cost of one
+     * comparison is negligible next to the reinit it guards. See
+     * SPI_A_ESP_STREAMING_FREQ_HZ's doc comment (spi_a.h). */
+    if (SPI_A_ADS_STREAMING_FREQ_HZ != SPI_A_ESP_STREAMING_FREQ_HZ) {
+        spi_a_set_frequency(SPI_A_ESP_STREAMING_FREQ_HZ);
+    }
+
     /* Configure SPI transaction buffers */
     nrfx_spim_xfer_desc_t xfer = {
         .p_tx_buffer = (uint8_t *)tx_buf,
@@ -104,11 +114,14 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     nrfx_err_t status = nrfx_spim_xfer(&spi_a_inst, &xfer, 0);
     if(!handshake_done){
         LOG_INF("SPI master transceive initiated, waiting for handshake to complete...");
-        LOG_INF("SPI master transceive initiated, sent: 0x%02X 0x%02X 0x%02X 0x%02X", 
+        LOG_INF("SPI master transceive initiated, sent: 0x%02X 0x%02X 0x%02X 0x%02X",
             tx_buf[0], tx_buf[1], tx_buf[2], tx_buf[3]);
     }
     if (status != NRFX_SUCCESS) {
         LOG_INF("SPI master transfer failed: %d", status);
+        if (SPI_A_ADS_STREAMING_FREQ_HZ != SPI_A_ESP_STREAMING_FREQ_HZ) {
+            spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
+        }
         k_mutex_unlock(&spi_a_mutex);
         return -EIO;
     }
@@ -125,6 +138,13 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
         // smaller timeout for regular packets after handshake is done
         status = k_sem_take(&spi_nrf_esp_transfer_done, K_MSEC(2));
     }
+
+    /* Restore the ADS rate now regardless of outcome -- ADS's own next
+     * transfer must not run at the ESP rate. */
+    if (SPI_A_ADS_STREAMING_FREQ_HZ != SPI_A_ESP_STREAMING_FREQ_HZ) {
+        spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
+    }
+
     if (status != 0) {
         LOG_INF("SPI master transfer timed out: %d", status);
         k_mutex_unlock(&spi_a_mutex);

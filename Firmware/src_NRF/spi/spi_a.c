@@ -99,9 +99,25 @@ static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context)
   }
 }
 
-int init_spi_a_bus(void) {
-  nrfx_err_t status;
+/** @brief (Re)configure and start spi_a_inst at the given frequency. Caller
+ *  handles mutex/uninit as needed. */
+static int spi_a_init_at(uint32_t frequency_hz) {
+  nrfx_spim_config_t config =
+      NRFX_SPIM_DEFAULT_CONFIG(SPI_A_SCK_PIN, SPI_A_MOSI_PIN, SPI_A_MISO_PIN, NRF_SPIM_PIN_NOT_CONNECTED);
+  config.frequency = frequency_hz;
+  config.mode = NRF_SPIM_MODE_1;
+  config.bit_order = NRF_SPIM_BIT_ORDER_MSB_FIRST;
+  config.irq_priority = SPI_A_INT_PRIO;
 
+  nrfx_err_t status = nrfx_spim_init(&spi_a_inst, &config, spi_a_event_handler, NULL);
+  if (status != NRFX_SUCCESS) {
+    LOG_ERR("SPI_A (SPIM%d) init failed: %d", SPI_A_INST_IDX, status);
+    return -1;
+  }
+  return 0;
+}
+
+int init_spi_a_bus(void) {
   if (spi_a_initialized) {
     return 0;
   }
@@ -111,16 +127,7 @@ int init_spi_a_bus(void) {
               NRFX_SPIM_INST_HANDLER_GET(SPI_A_INST_IDX), 0, 0);
 #endif
 
-  nrfx_spim_config_t config =
-      NRFX_SPIM_DEFAULT_CONFIG(SPI_A_SCK_PIN, SPI_A_MOSI_PIN, SPI_A_MISO_PIN, NRF_SPIM_PIN_NOT_CONNECTED);
-  config.frequency = NRFX_MHZ_TO_HZ(4);
-  config.mode = NRF_SPIM_MODE_1;
-  config.bit_order = NRF_SPIM_BIT_ORDER_MSB_FIRST;
-  config.irq_priority = SPI_A_INT_PRIO;
-
-  status = nrfx_spim_init(&spi_a_inst, &config, spi_a_event_handler, NULL);
-  if (status != NRFX_SUCCESS) {
-    LOG_ERR("SPI_A (SPIM%d) init failed: %d", SPI_A_INST_IDX, status);
+  if (spi_a_init_at(SPI_A_ADS_STREAMING_FREQ_HZ) != 0) {
     return -1;
   }
 
@@ -128,6 +135,14 @@ int init_spi_a_bus(void) {
   LOG_INF("SPI_A (SPIM%d) initialized: SCK=P0.%02d MOSI=P0.%02d MISO=P0.%02d", SPI_A_INST_IDX, SPI_A_SCK_PIN,
           SPI_A_MOSI_PIN, SPI_A_MISO_PIN);
   return 0;
+}
+
+int spi_a_set_frequency(uint32_t frequency_hz) {
+  k_mutex_lock(&spi_a_mutex, K_FOREVER);
+  nrfx_spim_uninit(&spi_a_inst);
+  int ret = spi_a_init_at(frequency_hz);
+  k_mutex_unlock(&spi_a_mutex);
+  return ret;
 }
 
 void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs) {

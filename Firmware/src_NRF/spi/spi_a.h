@@ -65,6 +65,39 @@
 /** @brief SPI_A interrupt priority level */
 #define SPI_A_INT_PRIO 1
 
+/**
+ * @brief SCLK frequency safe for ADS1298 command decode
+ *
+ * The ADS1298 needs 4 tCLK periods (tSDECODE) to internally decode each
+ * command byte (RESET, SDATAC, RREG, WREG, ...); sending a multi-byte
+ * command faster than that -- as a single burst DMA transfer does -- can
+ * outrun the decoder. Only applies to actual command bytes, not to reading
+ * already-converted samples in RDATAC mode (see SPI_A_ADS_STREAMING_FREQ_HZ).
+ */
+#define SPI_A_ADS_CMD_SAFE_FREQ_HZ NRFX_MHZ_TO_HZ(4)
+
+/**
+ * @brief SCLK frequency for steady-state ADS1298 data streaming
+ *
+ * SPI rate when reading data from the ADS1298.
+ * Safe once the ADS1298 is in RDATAC mode
+ * Maxmimum value is 8 Mhz (theoretical 15 MHz, but NRF supports only 8 or 16 MHz)
+ */
+#define SPI_A_ADS_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(8)
+
+/**
+ * @brief SCLK frequency for WiFi/SD (ESP32-C6) transfers
+ *
+ * The ESP side (as slave) can handle 40 MHz
+ *
+ * If this differs from SPI_A_ADS_STREAMING_FREQ_HZ, spi_master_transceive()
+ * (wifi_sd_spi_functions.c) switches SPI_A to this rate for the duration of
+ * each ESP transfer and back afterward; if they're equal, it skips both
+ * switches. That's a plain runtime check, not #if -- NRFX_MHZ_TO_HZ()'s
+ * expansion isn't guaranteed valid in a preprocessor constant expression.
+ */
+#define SPI_A_ESP_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(8)
+
 /** @brief nrfx SPIM driver instance shared by every device on SPI_A */
 extern nrfx_spim_t spi_a_inst;
 
@@ -72,16 +105,9 @@ extern nrfx_spim_t spi_a_inst;
  * @brief Serializes access to SPI_A across all consumers (ADS, WiFi/SD, ...)
  *
  * @note The ADS1298 driver releases this mutex right after kicking off an
- * async nrfx_spim_xfer() (matching its pre-existing, hardware-validated
- * timing), rather than holding it until the transfer completes. This
- * leaves a narrow theoretical window where another consumer could start a
- * transfer before the ADS one physically finishes. In practice ADS
- * transfers are a few dozen bytes at 4 MHz (tens of microseconds), so the
- * window is small, but it is not zero -- treat concurrent ADS + WiFi/SD
- * traffic as a known follow-up to validate on hardware, or to close by
- * having ADS hold the mutex until completion too (would require moving
- * its irq_lock()/busy-wait handling around, since Zephyr mutexes cannot be
- * released from ISR context).
+ * async nrfx_spim_xfer(), rather than holding it until the transfer completes. 
+ * This leaves a window where another consumer (ESP) could start a
+ * transfer before the ADS one physically finishes. 
  */
 extern struct k_mutex spi_a_mutex;
 
@@ -133,5 +159,19 @@ void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs);
  * spi_a_mutex's doc comment for why the mutex alone isn't sufficient.
  */
 spi_a_owner_t spi_a_current_owner(void);
+
+/**
+ * @brief Reconfigure SPI_A's CLK frequency
+ *
+ * Briefly tears down and reinitializes the SPIM peripheral with the same
+ * pin/mode config but a new frequency. 
+ *
+ * @param frequency_hz Desired CLK frequency in Hz -- must be one of the
+ *  discrete values nrfx_spim supports (e.g. SPI_A_ADS_CMD_SAFE_FREQ_HZ,
+ *  SPI_A_ADS_STREAMING_FREQ_HZ, SPI_A_ESP_STREAMING_FREQ_HZ); arbitrary
+ *  values are rejected by nrfx_spim_init() with NRFX_ERROR_INVALID_PARAM.
+ * @return 0 on success, -1 on nrfx re-init failure
+ */
+int spi_a_set_frequency(uint32_t frequency_hz);
 
 #endif // SPI_A_H

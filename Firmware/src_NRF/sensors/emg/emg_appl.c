@@ -60,6 +60,8 @@
 // Include inter-board hardware synchronization
 #include "core/board_sync.h"
 
+#include "spi/spi_a.h"
+
 extern uint16_t counter;
 
 LOG_MODULE_REGISTER(emg_appl, LOG_LEVEL_INF);
@@ -160,12 +162,19 @@ int emg_start_streaming(void) {
   }
   k_msleep(300);
 
+  /* ADS1298 command bytes (RESET/SDATAC/RREG/WREG below) need tSDECODE
+   * (4 tCLK) between bytes to decode -- SPI_A's streaming rate can outrun
+   * that, so drop to a safe rate for this one-time command sequence and
+   * restore full speed once it's done (see SPI_A_ADS_CMD_SAFE_FREQ_HZ). */
+  spi_a_set_frequency(SPI_A_ADS_CMD_SAFE_FREQ_HZ);
+
   if (first_run) {
     LOG_INF("Checking ADS1298 device IDs");
     if (ads_check_id(ADS1298_A) != 0 || ads_check_id(ADS1298_B) != 0) {
       LOG_ERR("ADS1298 ID check failed - powering rails off, EMG start aborted "
               "(check battery voltage / shield)");
       power_ads_off();
+      spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
       emg_state = EMG_STATE_ERROR;
       return -EIO;
     }
@@ -183,6 +192,9 @@ int emg_start_streaming(void) {
   };
   ads_init(ads_params, ADS1298_A);
   ads_init(ads_params, ADS1298_B);
+
+  /* Command sequence done -- back to full speed for RDATAC streaming. */
+  spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
 
   /* Signal thread to complete startup (sync barrier + ads_start) */
   k_sem_give(&emg_start_sem);
