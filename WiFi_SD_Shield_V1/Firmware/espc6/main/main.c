@@ -97,12 +97,17 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "NRF-ESP SPI bus initialized successfully");
     #endif
 
-    while(1){
+
+    uint8_t handshake_attempts = 0;
+    while (handshake_attempts < 3) {
+    //while(1){
         ret = initial_handshake_nrf_master_esp_slave_pq();
         if (ret == 0) {
-            ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
+            //ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
+            ESP_LOGI(MAIN_TAG, "handshake num %d successful", handshake_attempts);
             current_spi_mode = SPI_MODE_NRF;
-            break;
+            handshake_attempts+=1; 
+            //break;
         } else {
             ESP_LOGE(MAIN_TAG, "Initial handshake failed, retrying in 1 second: %s", esp_err_to_name(ret));
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -121,6 +126,9 @@ void app_main()
     ESP_LOGI(MAIN_TAG, "After init Wifi free heap: %d, free DMA: %d", heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_free_size(MALLOC_CAP_DMA));
     
     xEventGroupSetBits(g_evt, B_WIFI_CONNECTED);
+
+
+
 
 #if ESP_LOCAL_DUMMY_SENSOR
     // ESP-only dummy sensor test: bypasses SPI/BIOGAP entirely. Generates synthetic
@@ -183,6 +191,23 @@ void app_main()
     xEventGroupSetBits(g_evt, B_GUI_SOCKET_BIND);
     node_state = STATE_IDLE;
     ESP_LOGI(MAIN_TAG, "WiFi initialized and bound to GUI successfully");
+
+    // // do another handshake with the NRF master after WiFi is up, to ensure that the SPI bus is still functional
+    // handshake_attempts = 0;
+    // while (handshake_attempts < 3) {
+    // //while(1){
+    //     ret = initial_handshake_nrf_master_esp_slave_pq();
+    //     if (ret == 0) {
+    //         //ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
+    //         ESP_LOGI(MAIN_TAG, "handshake num %d successful", handshake_attempts);
+    //         current_spi_mode = SPI_MODE_NRF;
+    //         handshake_attempts+=1; 
+    //         //break;
+    //     } else {
+    //         ESP_LOGE(MAIN_TAG, "Initial handshake failed, retrying in 1 second: %s", esp_err_to_name(ret));
+    //         vTaskDelay(pdMS_TO_TICKS(1000));
+    //     }
+    // }
     
     // ========================== START ALL THE TASKS =============================
 

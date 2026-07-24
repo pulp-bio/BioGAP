@@ -83,28 +83,35 @@ static esp_err_t send_first_start_command_to_biogap_master(uint8_t command)
     rx_from_biogap_buf[2] = 0x00;
     rx_from_biogap_buf[3] = 0x00;
 
+    bool stop_ack_received = false;
 
-    spi_slave_transaction_t t = {0};
-    t.length = sizeof(tx_to_biogap_buf) * 8;  /* 4 bytes = 32 bits */
-    t.tx_buffer = tx_to_biogap_buf;
-    t.rx_buffer = rx_from_biogap_buf;
+    while(!stop_ack_received) {
+        spi_slave_transaction_t t = {0};
+        t.length = sizeof(tx_to_biogap_buf) * 8;  /* 4 bytes = 32 bits */
+        t.tx_buffer = tx_to_biogap_buf;
+        t.rx_buffer = rx_from_biogap_buf;
 
 
-    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
-        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to lock SPI bus mutex for command transmit");
-        return ESP_FAIL;
+        if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+            ESP_LOGE(BIOGAP_SEND_TAG, "Failed to lock SPI bus mutex for command transmit");
+            return ESP_FAIL;
+        }
+
+        ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
+        SPI_BUS_UNLOCK();
+        if (ret != ESP_OK) {
+            ESP_LOGE(BIOGAP_SEND_TAG, "Failed to transmit command to BIOGAP master: %s", esp_err_to_name(ret));
+            return ret;
+        }
+        
+        ESP_LOGI(BIOGAP_SEND_TAG, "Transmitted 4-byte control frame: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X",
+                tx_to_biogap_buf[0], tx_to_biogap_buf[1], tx_to_biogap_buf[2], tx_to_biogap_buf[3]);
+        ESP_LOGI(BIOGAP_SEND_TAG, "Received 4-byte control frame: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X",
+                rx_from_biogap_buf[0], rx_from_biogap_buf[1], rx_from_biogap_buf[2], rx_from_biogap_buf[3]);
+        if (rx_from_biogap_buf[0] == 0xBB && rx_from_biogap_buf[1] == 0xBB && rx_from_biogap_buf[2] == 0xBB && rx_from_biogap_buf[3] == 0xBB){
+            stop_ack_received = true;
+        }
     }
-
-    ret = spi_slave_transmit(SPI_HOST_DEVICE, &t, portMAX_DELAY);
-    SPI_BUS_UNLOCK();
-    if (ret != ESP_OK) {
-        ESP_LOGE(BIOGAP_SEND_TAG, "Failed to transmit command to BIOGAP master: %s", esp_err_to_name(ret));
-        return ret;
-    }
-
-    ESP_LOGI(BIOGAP_SEND_TAG, "Transmitted 4-byte control frame: [0] 0x%02X, [1] 0x%02X, [2] 0x%02X, [3] 0x%02X",
-             tx_to_biogap_buf[0], tx_to_biogap_buf[1], tx_to_biogap_buf[2], tx_to_biogap_buf[3]);
-
     return ESP_OK;
 }
 

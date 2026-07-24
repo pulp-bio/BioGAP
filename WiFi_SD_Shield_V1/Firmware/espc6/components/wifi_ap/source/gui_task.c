@@ -153,29 +153,81 @@ esp_err_t rb_soft_flush(RingbufHandle_t rb)
 }
 
 
-/** @brief Task to transmit data to the GUI 
+/** @brief Send all len bytes of buf to sock, retrying through partial writes.
+ *
+ * A single send() call is allowed to write fewer bytes than requested when
+ * the socket's send buffer is under pressure -- that's normal TCP behavior,
+ * not an error. Treating such a partial write as success (as a bare send()
+ * call does) puts a truncated packet on the wire and permanently shifts the
+ * byte alignment of every packet sent afterward, since the receiver has no
+ * way to know part of a packet is missing.
+ *
+ * Once any bytes have actually been committed to the wire for this packet,
+ * giving up is no longer a safe way to fail -- those bytes can't be
+ * un-sent, so abandoning the rest guarantees a misaligned stream for every
+ * packet sent afterward. Retrying costs only time, not correctness, so the
+ * retry budget is far more generous after the first byte goes out than
+ * before it (nothing lost yet, safe to give up quickly and drop the whole
+ * packet). Both are still bounded so a genuinely dead socket eventually
+ * gets reported as failed rather than retrying forever.
+ */
+static int send_all(int sock, const uint8_t *buf, size_t len)
+{
+    size_t sent_total = 0;
+    int attempts = 0;
+    const int max_attempts_before_commit = 5;
+    const int max_attempts_after_commit = 25;
+
+    while (sent_total < len) {
+        int sent = send(sock, buf + sent_total, len - sent_total, 0);
+        if (sent < 0) {
+            int limit = (sent_total > 0) ? max_attempts_after_commit : max_attempts_before_commit;
+            if (++attempts >= limit) {
+                ESP_LOGE(GUI_TAG, "send_all gave up after %d attempts (%u/%u bytes sent)",
+                         attempts, (unsigned)sent_total, (unsigned)len);
+                return -1;
+            }
+            continue;
+        }
+        sent_total += (size_t)sent;
+        if (sent_total < len) {
+            ESP_LOGW(GUI_TAG, "Partial send: %u/%u bytes sent, retrying...", (unsigned)sent_total, (unsigned)len);
+        }
+    }
+    return 0;
+}
+
+/** @brief Task to transmit data to the GUI
  * This task is responsible for draining the content of the ringbuffer and sending it to the GUI via WiFi.
 */
 void tx_to_gui(void *pvParameters)
 {
-
+    uint16_t counter_rcv_prev = 0;
     while(1){
         if(node_state == STATE_STREAMING){
             size_t item_size = 0;
             uint8_t *item = (uint8_t *)xRingbufferReceive(biogap_ringbuf, &item_size, portMAX_DELAY);
+            if(item != NULL){
+                uint16_t counter_rcv = (item[2] << 8) | item[1];
+                if(counter_rcv != (counter_rcv_prev + 1)){
+                    ESP_LOGW(GUI_TAG, "Missed packet(s) in ringbuffer: expected counter %d, got %d", counter_rcv_prev + 1, counter_rcv);
+                }
+                counter_rcv_prev = counter_rcv;
 
-            if(item !=NULL){
                 // send immediately to the gui
-                int sent = send(gui_sock, item, item_size, 0);
-                // int sent = 1; //hardcoded for now
+                int sent = send_all(gui_sock, item, item_size);
                 if (sent < 0) {
-                    // item will stay in the ringbuffer since we havent' return it yet. 
-                    // ESP_LOGE(GUI_TAG, "Failed to send data to GUI"); 
+                    ESP_LOGE(GUI_TAG, "Failed to send data to GUI, dropping packet (errno=%d)", errno);
                 }
-                else{
-                    // remove the item from the ringbuffer only if it was sent successfully
-                    vRingbufferReturnItem(biogap_ringbuf, (void *)item);
-                }
+                /* biogap_ringbuf is RINGBUF_TYPE_NOSPLIT, which requires items
+                 * to be returned in the exact order they were received --
+                 * always return here, even on a failed send. Leaving a failed
+                 * item unreturned while later items keep getting returned
+                 * violates that FIFO order and corrupts the ringbuffer's
+                 * internal bookkeeping (this was the actual cause of the
+                 * GUI-side counter getting stuck on a stale/garbage value
+                 * after a send failure, not a WiFi/TCP framing issue). */
+                vRingbufferReturnItem(biogap_ringbuf, (void *)item);
             }
         }
 

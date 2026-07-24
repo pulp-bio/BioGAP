@@ -160,8 +160,64 @@ nRF blocks on `B_BIOGAP_CONECTED` before doing anything.
   (`NRF_EXG_HEADER 0x55` / `NRF_EXG_TAILER 0xAA`, `NRF_EXG_PACKET_SIZE` = 211 bytes),
   pushed into `biogap_ringbuf` via `add_to_ringbuffer()`, and its descriptor is
   immediately re-queued.
-- `tx_to_gui()` (`gui_task.c`) drains `biogap_ringbuf` and `send()`s each item straight
-  to `gui_sock` whenever `node_state == STATE_STREAMING`.
+- `tx_to_gui()` (`gui_task.c`) drains `biogap_ringbuf` and sends each item to
+  `gui_sock` via `send_all()` (below) whenever `node_state == STATE_STREAMING`.
+  Always returns the dequeued item to the ring buffer regardless of send outcome --
+  `biogap_ringbuf` is `RINGBUF_TYPE_NOSPLIT`, which requires items to be returned in
+  the exact order they were received; leaving a failed item unreturned while later
+  ones keep getting returned violates that order and corrupts the ring buffer's
+  internal bookkeeping (this previously showed up as the GUI getting stuck on a
+  stale/garbage packet after any single send failure).
+
+#### Partial-write handling (`send_all()`, `gui_task.c`)
+
+A single `send()` call is allowed to write fewer bytes than requested under
+congestion -- that's normal TCP behavior, not an error. Treating a partial write as
+success (a bare `send()` call does) puts a truncated packet on the wire and
+permanently shifts the byte alignment of every packet sent afterward, since the
+receiver has no way to know part of a packet is missing.
+
+`send_all()` retries until the full packet is sent or it gives up, with two
+different retry budgets depending on whether any bytes have actually been committed
+to the wire yet for the current packet:
+- **Before any bytes are sent** (`sent_total == 0`): fails fast (5 attempts, up to
+  ~1s given the 200ms `SO_SNDTIMEO`) -- nothing has gone out yet, so dropping the
+  whole packet is harmless.
+- **After the first byte is committed**: retries far more persistently (25 attempts,
+  up to ~5s) -- those bytes can't be un-sent, so giving up at that point guarantees
+  a misaligned stream for every packet sent afterward. Retrying only costs time, not
+  correctness.
+
+This is a real trade-off against `biogap_ringbuf`'s capacity (`RINGBUFF_SIZE`,
+200,000 bytes): while `tx_to_gui()` is blocked retrying one packet, new transactions
+keep arriving from the nRF (up to 250 bytes every ~8ms at the current EEG rate) and
+pile up in the ring buffer, since the consumer isn't draining it. Worst case for one
+full 5s stall: ~625 transactions x 250 B = ~156 KB, leaving ~44 KB of headroom in
+the 200 KB buffer -- enough for one isolated stall, but two worst-case stalls
+back-to-back (without the buffer draining in between) would exceed capacity and
+trigger `add_to_ringbuffer()` failures, which force a STOP (`B_RINGBUFFER_FULL` ->
+`B_STOP_CMD_RCV_FORCED`, see STOP path below). If sustained/repeated congestion
+turns out to be common in practice, the fix is either a bigger `RINGBUFF_SIZE` or a
+smaller `max_attempts_after_commit`, trading corruption-resistance for ring-buffer
+safety.
+
+Even with this retry logic, a packet can still fail to complete after already
+committing some bytes (a truly dead/exhausted link). That's an unavoidable,
+permanent misalignment for that connection from that point on -- recovering from it
+is BioGUI's job (below), not something the ESP side can prevent once it's happened.
+
+#### BioGUI-side resync (`biogui/data_sources/tcp_client.py`)
+
+`TCPClientDataSourceWorker` accepts optional `headerByte`/`tailerByte` values
+(`0x55`/`0xAA` for this interface, see `interface_biogapultra_eeg.py`). If a
+211-byte window doesn't have the expected byte at both positions, one byte is
+dropped and parsing retries from the new offset instead of emitting a
+corrupt/misaligned packet -- this is what actually recovers from any leftover
+misalignment (a partial send that couldn't complete, stray startup bytes, etc.),
+since the ESP side alone cannot always prevent it. Needs at least one fully intact
+packet somewhere in the buffered stream to find a valid resync point; back-to-back
+corrupting events with no clean packet in between can delay recovery until one
+finally gets through whole.
 
 ### 5. STOP path
 
@@ -294,13 +350,6 @@ Actively being worked on:
   likely at high sample rates (e.g. ~1ms sensor period, ~250x the original ~400ms
   cadence) — the SPI slave queue can run dry before the ACK is ever seen, and the
   NRF's next transaction then reads back `0xFF/0xFF` and halts.
-- **`tx_to_gui()` leaks ring-buffer space on `send()` failure** (`gui_task.c`): on a
-  failed `send()` to the GUI socket, the already-dequeued `xRingbufferReceive()` item is
-  never returned via `vRingbufferReturnItem()` (the code comments assume it "stays in
-  the ring buffer," but it's already been dequeued). Repeated send failures (WiFi
-  congestion, GUI not draining fast enough) leak ring-buffer space until
-  `add_to_ringbuffer()` starts failing, which forces a STOP (`B_STOP_CMD_RCV_FORCED`)
-  and can cascade into the issue above.
 
 Other known limitations:
 

@@ -278,7 +278,8 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 {
 
     uint64_t packet_count = 0;
-    uint16_t tx_counter = 0;  /* Transmit counter sent to master */
+    uint16_t tx_counter = 0;        /* Transmit counter sent to master */
+    uint16_t rx_counter_prev = 0;   /* Previous receive counter for detecting missed packets */
     esp_err_t ret;
     ret = allocate_prequeue_resources();
     read_from_biogap_task_nrf_master_pq_esp_slave_handle = xTaskGetCurrentTaskHandle();
@@ -360,6 +361,10 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
                 /* Extract counter (little-endian at bytes[1:2]) */
                 uint16_t counter = (rx_data[2] << 8) | rx_data[1];
+                if(counter != (rx_counter_prev+1)){
+                    ESP_LOGW(BIOGAP_READ_TAG, "Missed packet(s): expected counter %d, got %d", rx_counter_prev+1, counter);
+                }
+                rx_counter_prev = counter;
                 packet_count++;
 
                 /* Add packet to ringbuffer */
