@@ -82,7 +82,13 @@ void process_esp_data(void) {
         else{
             LOG_WRN("Received invalid data from ESP, ignoring: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
             // halt the system
-            //LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
+            if (nrf_esp_comm_state == SEND_TO_ESP) {
+                LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
+            }
+            else{
+                LOG_ERR("NRF-ESP comm state is not SEND_TO_ESP (current state: %d), but received invalid data from ESP - NRF53 HALTED", nrf_esp_comm_state);
+            }
+            
             //while (1) {k_sleep(K_FOREVER);} // before
         }
         serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding

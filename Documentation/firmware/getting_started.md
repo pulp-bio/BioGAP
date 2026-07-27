@@ -79,6 +79,7 @@ cd C:\ncs\v2.6.1   # your NCS workspace root — wherever `west init` set it up
 west build --build-dir C:\path\to\BioGAP\Firmware\src_NRF\build C:\path\to\BioGAP\Firmware\src_NRF --board nrf5340_senseiv1_cpuapp --pristine
 ```
 
+
 Drop `--pristine` on later incremental builds (it forces a full reconfigure/clean build — useful the first time or after changing Kconfig/CMakeLists, unnecessary otherwise, and slower).
 
 On Linux/macOS the same idea applies with your shell's syntax (`cd ~/ncs/v2.6.1 && west build --build-dir ~/BioGAP/Firmware/src_NRF/build ~/BioGAP/Firmware/src_NRF --board nrf5340_senseiv1_cpuapp --pristine`).

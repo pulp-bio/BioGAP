@@ -79,11 +79,11 @@ static uint8_t emg_tx_buf[EMG_PCKT_SIZE];
 static uint8_t emg_buf_idx = 0;
 static uint8_t emg_pkt_counter = 0;
 static emg_config_t emg_config = {
-    .sample_rate = 6,
-    .ads_mode = 0,
+    .sample_rate = 5,
+    .ads_mode = 5,
     .channel_2_func = 2,
     .channel_4_func = 4,
-    .gain = 0
+    .gain = 0x10
 };
 static bool first_run = true;
 
