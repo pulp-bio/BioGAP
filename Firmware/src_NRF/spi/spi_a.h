@@ -83,7 +83,7 @@
  * Safe once the ADS1298 is in RDATAC mode
  * Maxmimum value is 8 Mhz (theoretical 15 MHz, but NRF supports only 8 or 16 MHz)
  */
-#define SPI_A_ADS_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(8)
+#define SPI_A_ADS_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(4)
 
 /**
  * @brief SCLK frequency for WiFi/SD (ESP32-C6) transfers

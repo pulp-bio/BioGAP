@@ -58,11 +58,6 @@ extern void ads_spim_transfer_complete(void);
 extern void wifi_sd_spim_transfer_complete(void);
 #endif
 
-/** @brief Set by ads_spi_data.c; true once the in-flight ADS transfer is
- *  the cycle's last one, so this handler knows when it's safe to release
- *  current_owner back to SPI_A_OWNER_NONE. */
-extern volatile bool ads_a_and_b_done;
-
 static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context) {
   ARG_UNUSED(p_context);
   if (p_event->type != NRFX_SPIM_EVENT_DONE) {
@@ -89,14 +84,9 @@ static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context)
       LOG_WRN("SPI_A transfer completed with no registered owner");
       break;
   }
-  // Make sure that ADS has completed transfers both from A and B
-  if ((current_owner == SPI_A_OWNER_ADS) & (!ads_a_and_b_done)){
-    current_owner = SPI_A_OWNER_ADS;
-  }
-  else{
-    // No Owner, others can take the SPI bus 
-    current_owner = SPI_A_OWNER_NONE;
-  }
+  // ADS1298_A and ADS1298_B are each read as their own standalone transfer
+  // (independent DRDY interrupts), so every completion fully releases the bus.
+  current_owner = SPI_A_OWNER_NONE;
 }
 
 /** @brief (Re)configure and start spi_a_inst at the given frequency. Caller

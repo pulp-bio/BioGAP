@@ -481,6 +481,7 @@ void send_data_ble(char *data_array, int16_t length) {
     LOG_WRN("Failed to send data over BLE connection");
     ble_packets_failed++;
   } else {
+    LOG_INF("Data sent over BLE connection: %d bytes", length);
     /* Identify packet type by header byte */
     uint8_t header = (uint8_t)data_array[0];
     if (header == BLE_EEG_PACKET_HEADER) {

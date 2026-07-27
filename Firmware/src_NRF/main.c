@@ -125,7 +125,7 @@ int main(void) {
 
 //  LOG_INF("Enabling charge...");
   pwr_charge_enable();
-  power_exg_on(0); 
+  power_exg_on(1); 
   /* Start the SDK power thread: refreshes the battery/charger telemetry
    * cache every THREAD_PWR_UPDATE_PERIOD_MS (and on PMIC nIRQ) and
    * re-applies the charger config periodically. Runs at the lowest
