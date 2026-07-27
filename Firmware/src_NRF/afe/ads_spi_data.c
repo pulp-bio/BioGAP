@@ -65,6 +65,17 @@ LOG_MODULE_REGISTER(ads_spi_data, LOG_LEVEL_INF);
  */
 extern uint8_t ads_rx_buf[40];
 
+/**
+ * @brief Whether ADS1298_B's read (of the current A+B pair) has completed
+ *
+ * process_ads_data() reads A then B back-to-back once both DRDYs fire.
+ * Read from ISR context by spi_a.c's shared completion handler, so it knows
+ * whether to keep SPI_A's owner pinned to ADS across the A->B gap (false)
+ * or release the bus once the pair is done (true) -- otherwise WiFi/SD
+ * could grab the bus in between the two reads. Must be volatile.
+ */
+volatile bool ads_a_and_b_done = true;
+
 /*==============================================================================
  * Module Variables - BLE Packet Construction
  *============================================================================*/
@@ -256,7 +267,7 @@ void ads_spim_handler_done(void) {
         //LOG_INF("Adding data to ESP send buffer");
         add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #else
-        LOG_INF("Adding data to BLE send buffer");
+        //LOG_INF("Adding data to BLE send buffer");
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #endif
       }
@@ -312,12 +323,22 @@ void process_ads_data(void) {
       if (!ads_a_served || !ads_b_served) {
         ads_set_function(ADS_STOP);
       } else {
+        // A and B are read back-to-back below; keep SPI_A's owner pinned to
+        // ADS across that gap so WiFi/SD can't grab the bus between them
+        // (see ads_a_and_b_done's doc comment).
+        ads_a_and_b_done = false;
+
         ads_a_served = false;
         spi_xfer_done = false;
         ads_to_read = ADS1298_A;
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_A);
         while (spi_xfer_done == false)
           ;
+
+        // Must be set before kicking off B, not after its busy-wait below:
+        // B's completion ISR (spi_a.c) reads this flag to decide whether to
+        // release SPI_A's owner, and it can fire before this thread resumes.
+        ads_a_and_b_done = true;
 
         ads_b_served = false;
         spi_xfer_done = false;
