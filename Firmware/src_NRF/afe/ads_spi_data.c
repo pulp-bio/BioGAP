@@ -292,20 +292,24 @@ void ads_drdy_callback_b(void) {
 }
 
 /**
- * @brief Process ADS1298 data when a DRDY interrupt occurs
+ * @brief Process ADS1298 data once both DRDYs have fired
  *
  * Main data acquisition handler called from application main loop.
- * ADS1298_A and ADS1298_B are triggered by their own independent DRDY
- * interrupts and are serviced independently below -- each is its own
- * standalone SPI_A transfer, read as soon as that device (and only that
- * device) signals it is ready.
+ * ADS1298_A and ADS1298_B each have their own independent DRDY interrupt,
+ * but both are held until the other has also signaled ready -- neither
+ * device's SPI interface is touched until both are confirmed ready.
  */
 void process_ads_data(void) {
-  if (ads_a_data_ready) {
+  /* Wait until BOTH devices have signaled their own DRDY before touching
+   * either one's SPI interface -- unlike servicing each independently the
+   * moment its own flag sets, this guarantees we never assert CS/clock a
+   * device while its internal conversion could still be in progress. */
+  if (ads_a_data_ready && ads_b_data_ready) {
     ads_a_data_ready = false;
-    uint32_t a_block_start = k_cycle_get_32();
+    ads_b_data_ready = false;
+
     if (ads_get_function() == ADS_READ) {
-      if (!ads_a_served) {
+      if (!ads_a_served || !ads_b_served) {
         ads_set_function(ADS_STOP);
       } else {
         ads_a_served = false;
@@ -314,22 +318,7 @@ void process_ads_data(void) {
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_A);
         while (spi_xfer_done == false)
           ;
-      }
-    }
-    uint32_t now = k_cycle_get_32();
-    uint32_t a_latency_us = k_cyc_to_us_floor32(now - ads_a_drdy_cycles);
-    uint32_t a_block_us = k_cyc_to_us_floor32(now - a_block_start);
-    if (a_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      LOG_WRN("A DRDY serviced after %u us (A block itself took %u us)", a_latency_us, a_block_us);
-    }
-  }
 
-  if (ads_b_data_ready) {
-    ads_b_data_ready = false;
-    if (ads_get_function() == ADS_READ) {
-      if (!ads_b_served) {
-        ads_set_function(ADS_STOP);
-      } else {
         ads_b_served = false;
         spi_xfer_done = false;
         ads_to_read = ADS1298_B;
@@ -338,9 +327,15 @@ void process_ads_data(void) {
           ;
       }
     }
-    uint32_t b_latency_us = k_cyc_to_us_floor32(k_cycle_get_32() - ads_b_drdy_cycles);
+
+    uint32_t now = k_cycle_get_32();
+    uint32_t a_latency_us = k_cyc_to_us_floor32(now - ads_a_drdy_cycles);
+    uint32_t b_latency_us = k_cyc_to_us_floor32(now - ads_b_drdy_cycles);
+    if (a_latency_us > ADS_DRDY_LATENCY_WARN_US) {
+      LOG_WRN("A DRDY serviced after %u us (waited for B)", a_latency_us);
+    }
     if (b_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      LOG_WRN("B DRDY serviced after %u us", b_latency_us);
+      LOG_WRN("B DRDY serviced after %u us (waited for A)", b_latency_us);
     }
   }
   k_sleep(K_USEC(1));
