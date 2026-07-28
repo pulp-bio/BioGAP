@@ -132,7 +132,8 @@ void app_main()
 
 #if ESP_LOCAL_DUMMY_SENSOR
     // ESP-only dummy sensor test: bypasses SPI/BIOGAP entirely. Generates synthetic
-    // dummy-sensor packets locally and streams them to BioGUI over the TCP connection,
+    // dummy-sensor packets locally
+     and streams them to BioGUI over the TCP connection,
     // to test the WiFi/GUI half of the system without any nRF/SPI hardware attached.
     biogap_ringbuf = xRingbufferCreate(RINGBUFF_SIZE, RINGBUF_TYPE_NOSPLIT);
     if (biogap_ringbuf == NULL) {

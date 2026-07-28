@@ -354,9 +354,26 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                  * in biogap_to_esp_transaction() passes -- which also means a tx-side
                  * check here would trivially pass regardless of transfer integrity. */
                 if (!is_valid_packet(rx_data, rx_bytes)) {
-                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
+                    /* Not necessarily corruption: the NRF sends a dedicated
+                     * STOP-ACK transceive (header/tailer 0xE6/0xBB) whenever
+                     * it thinks the ESP asked to stop, which can be a false
+                     * positive -- ESP_STOP_COMMAND (245) collides with the
+                     * regular streaming reply's counter MSB once every
+                     * 65536-count wrap. Drop this one transaction and keep
+                     * the slot armed rather than killing the whole task. */
+                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X) -- dropping, re-arming slot",
                             rx_data[0], rx_data[rx_bytes - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
-                    break;
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after invalid packet");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after invalid packet: %s", esp_err_to_name(ret));
+                        break;
+                    }
+                    continue;
                 }
 
                 /* Extract counter (little-endian at bytes[1:2]) */
@@ -389,6 +406,15 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 }
                 /* Update the descriptor's TX buffer for its next transaction */
                 tx_counter++;  /* Advance transmit counter */
+                /* The NRF treats byte[2] == ESP_STOP_COMMAND (245) as a real
+                 * stop request (biogap_to_esp_transaction()), but byte[2] is
+                 * just this counter's high byte -- it would otherwise pass
+                 * through 245 once every 65536-count wrap with no stop
+                 * actually requested. Skip the whole colliding block so that
+                 * never happens. */
+                if (((tx_counter >> 8) & 0xFF) == ESP_STOP_COMMAND) {
+                    tx_counter += 256;
+                }
                 tx_data[0] = ESP_EXG_HEADER;
                 //tx_data[PACKET_SZ - 1] = ESP_EXG_TAILER;
                 tx_data[1] = tx_counter & 0xFF;  /* LSB of counter */
