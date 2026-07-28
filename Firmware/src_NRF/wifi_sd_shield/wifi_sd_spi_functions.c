@@ -136,7 +136,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     }
     else{
         // smaller timeout for regular packets after handshake is done
-        status = k_sem_take(&spi_nrf_esp_transfer_done, K_MSEC(2));
+        status = k_sem_take(&spi_nrf_esp_transfer_done, K_USEC(500));                 //M_MSEC(1)
     }
 
     /* Restore the ADS rate now regardless of outcome -- ADS's own next
@@ -189,7 +189,7 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
             while (1) {k_sleep(K_FOREVER);}
             return -EIO;   
     }
-
+    
     //check if the received data contain an implicit stop command from ESP
     if(spi_rx_buf[2] == ESP_STOP_COMMAND){
         LOG_INF("Received ESP STOP command, resetting NRF-ESP communication state and waiting for stop sensor command");

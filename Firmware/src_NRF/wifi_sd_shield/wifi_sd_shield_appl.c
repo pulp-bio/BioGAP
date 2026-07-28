@@ -211,8 +211,12 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
                 // make sure that the read-transaction from the ESP has the priority to avoid SPI bus contention. 
                 if (serve_esp_requests) {
                     LOG_INF("ESP requests pending, prioritizing incoming data processing over sending");
-                    // Yield to allow processing of incoming ESP data
-                    k_msleep(1);
+                    /* Yield to allow processing of incoming ESP data. Was
+                     * k_msleep(1) (1ms) -- at 2000 Hz ADS sampling that's 2+
+                     * full conversion periods per hit; the RTC system tick
+                     * is ~30.5us, so a much shorter sleep still yields
+                     * without needlessly delaying the next real EXG send. */
+                    k_sleep(K_USEC(50));
                     continue; // Skip this send iteration to prioritize incoming data
                 }
 
@@ -220,7 +224,7 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
                 if (nrf_esp_comm_state != SEND_TO_ESP) {
                     LOG_INF("NRF-ESP comm state not ready for sending (current state: %d), yielding to allow state change", nrf_esp_comm_state);
                     // Yield and retry later
-                    k_msleep(1);
+                    k_sleep(K_USEC(50));
                     continue;
                 }
                 //LOG_INF("Starting BIOGAP to ESP transaction, size: %d", packet.size);

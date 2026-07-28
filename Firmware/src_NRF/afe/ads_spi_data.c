@@ -353,10 +353,10 @@ void process_ads_data(void) {
     uint32_t a_latency_us = k_cyc_to_us_floor32(now - ads_a_drdy_cycles);
     uint32_t b_latency_us = k_cyc_to_us_floor32(now - ads_b_drdy_cycles);
     if (a_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      LOG_WRN("A DRDY serviced after %u us (waited for B)", a_latency_us);
+      //LOG_WRN("A DRDY serviced after %u us (waited for B)", a_latency_us);
     }
     if (b_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      LOG_WRN("B DRDY serviced after %u us (waited for A)", b_latency_us);
+      //LOG_WRN("B DRDY serviced after %u us (waited for A)", b_latency_us);
     }
   }
   k_sleep(K_USEC(1));
