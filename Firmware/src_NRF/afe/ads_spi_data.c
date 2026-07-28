@@ -66,13 +66,15 @@ LOG_MODULE_REGISTER(ads_spi_data, LOG_LEVEL_INF);
 extern uint8_t ads_rx_buf[40];
 
 /**
- * @brief Boolean to check if the ADS A and B have completed their transfers
+ * @brief Whether ADS1298_B's read (of the current A+B pair) has completed
  *
- * Read from ISR context by spi_a.c's shared completion handler, so must be
- * volatile.
+ * process_ads_data() reads A then B back-to-back once both DRDYs fire.
+ * Read from ISR context by spi_a.c's shared completion handler, so it knows
+ * whether to keep SPI_A's owner pinned to ADS across the A->B gap (false)
+ * or release the bus once the pair is done (true) -- otherwise WiFi/SD
+ * could grab the bus in between the two reads. Must be volatile.
  */
 volatile bool ads_a_and_b_done = true;
-
 
 /*==============================================================================
  * Module Variables - BLE Packet Construction
@@ -118,6 +120,30 @@ uint8_t counter_extra = 0;
  */
 static uint32_t exg_packet_timestamp = 0;
 
+/**
+ * @brief Per-device sample counters within the current packet
+ *
+ * ADS1298_A and ADS1298_B are read independently (own DRDY each), so each
+ * tracks its own write position into ble_tx_buf instead of sharing tx_buf_inx.
+ * Reset to 0 once both reach EXG_SAMPLES_PER_PACKET and the packet is sent.
+ */
+static uint8_t ads_a_counter = 0;
+static uint8_t ads_b_counter = 0;
+
+/**
+ * @brief Cycle timestamp of each device's most recent DRDY assert
+ *
+ * Set in the DRDY ISR, read back in process_ads_data() to measure how long
+ * it actually took to service that DRDY -- used to diagnose whether B's
+ * irregular cadence is a real ADS1298 overrun (DRDY not serviced before the
+ * next conversion) or something else.
+ */
+static uint32_t ads_a_drdy_cycles = 0;
+static uint32_t ads_b_drdy_cycles = 0;
+
+/** @brief DRDY-to-serviced latency above which we log a warning (us) */
+#define ADS_DRDY_LATENCY_WARN_US 500
+
 /*==============================================================================
  * Module Variables - State Flags
  *============================================================================*/
@@ -131,20 +157,23 @@ static uint32_t exg_packet_timestamp = 0;
 volatile bool spi_xfer_done = true;
 
 /**
- * @brief Data ready interrupt flag
+ * @brief Data ready interrupt flags
  *
- * Set by DRDY GPIO interrupt when new ADC data is available. Cleared
- * by process_ads_data() after reading.
+ * Set independently by each device's own DRDY GPIO interrupt when new ADC
+ * data is available. Cleared by process_ads_data() after reading.
  */
-volatile bool ads_data_ready = false;
+volatile bool ads_a_data_ready = false;
+volatile bool ads_b_data_ready = false;
 
 /**
- * @brief DRDY serviced flag
+ * @brief DRDY serviced flags
  *
- * Tracks whether the previous DRDY interrupt was serviced. If false when
- * new DRDY arrives, indicates data overrun and acquisition is stopped.
+ * Tracks whether the previous DRDY interrupt for each device was serviced.
+ * If false when a new DRDY arrives for that device, indicates data overrun
+ * and acquisition is stopped.
  */
-bool drdy_served = true;
+bool ads_a_served = true;
+bool ads_b_served = true;
 
 /**
  * @brief BLE packet ready flag
@@ -174,23 +203,31 @@ volatile bool ads_to_read = ADS1298_A;
  */
 void ads_spim_handler_done(void) {
   if (ads_get_function() == ADS_READ) {
-    /* Timestamp the first sample of each packet (harmonized first-sample
-     * convention): when tx_buf_inx sits at the start of the sample region,
-     * a fresh packet is beginning. */
-    if (tx_buf_inx == EXG_SAMPLE_DATA_START) {
-      exg_packet_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
+    if (ads_to_read == ADS1298_A) {
+      /* Timestamp the first sample of each packet: ads_a_counter == 0 means
+       * this is the first A sample of a fresh packet. */
+      if (ads_a_counter == 0) {
+        exg_packet_timestamp = k_cyc_to_us_floor32(k_cycle_get_32());
+      }
+      uint32_t offset = EXG_SAMPLE_DATA_START + EXG_BYTES_PER_SAMPLE * ads_a_counter;
+      memcpy(&ble_tx_buf[offset], &ads_rx_buf[3], EXG_ADS_BLOCK_BYTES);
+      ads_a_counter++;
+      ads_a_served = true;
+    } else { // ADS1298_B
+      uint32_t offset = EXG_SAMPLE_DATA_START + EXG_ADS_BLOCK_BYTES +
+                         EXG_BYTES_PER_SAMPLE * ads_b_counter;
+      memcpy(&ble_tx_buf[offset], &ads_rx_buf[3], EXG_ADS_BLOCK_BYTES);
+      ble_tx_buf[offset + EXG_ADS_BLOCK_BYTES] = counter_extra; // add here your custom data for each sample.
+      ble_tx_buf[offset + EXG_ADS_BLOCK_BYTES + 1] = 0x00; // Reserved byte for future use
+      ads_b_counter++;
+      ads_b_served = true;
     }
-    memcpy(&ble_tx_buf[tx_buf_inx], &ads_rx_buf[3], 24);
-    tx_buf_inx += 24;
 
-    if (ads_to_read == ADS1298_B) {
-      //  Set packet identifier to EEG all channels + PPG inactive
-      ble_tx_buf[tx_buf_inx++] = counter_extra; // add here your custom data for each sample.
-      ble_tx_buf[tx_buf_inx++] = 0x00; // Reserved byte for future use
-    }
-
-    if (tx_buf_inx == EXG_SAMPLE_DATA_END) {
-      // Check if the last pck was handled and reset flag
+    // Packet is ready once both devices have contributed all their samples --
+    // this is the signal that hands the packet off to BLE/ESP.
+    if (ads_a_counter == EXG_SAMPLES_PER_PACKET && ads_b_counter == EXG_SAMPLES_PER_PACKET) {
+      ads_a_counter = 0;
+      ads_b_counter = 0;
 
       if (pck_ble_ready == true) {
         ads_set_function(ADS_STOP);
@@ -230,69 +267,96 @@ void ads_spim_handler_done(void) {
         //LOG_INF("Adding data to ESP send buffer");
         add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #else
+        //LOG_INF("Adding data to BLE send buffer");
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #endif
       }
     }
-
-    drdy_served = true;
   }
   spi_xfer_done = true;
   LOG_DBG("Setting spi_xfer_done to true");
 }
 
 /**
- * @brief DRDY interrupt callback
+ * @brief DRDY interrupt callback for ADS1298_A
  *
  * Signals that new data is available and increments debug counter.
  */
-void ads_drdy_callback(void) {
+void ads_drdy_callback_a(void) {
   /* Signal that new data is available */
-  ads_data_ready = true;
+  ads_a_data_ready = true;
+  ads_a_drdy_cycles = k_cycle_get_32();
   /* Increment debug counter for timing analysis */
   counter_extra = counter_extra + 1;
   // LOG_INF("ADS DRDY interrupt");
 }
 
 /**
- * @brief Process ADS1298 data when DRDY interrupt occurs
+ * @brief DRDY interrupt callback for ADS1298_B
+ *
+ * Signals that new data is available on ADS1298_B.
+ */
+void ads_drdy_callback_b(void) {
+  ads_b_data_ready = true;
+  ads_b_drdy_cycles = k_cycle_get_32();
+  // LOG_INF("ADS B DRDY interrupt");
+}
+
+/**
+ * @brief Process ADS1298 data once both DRDYs have fired
  *
  * Main data acquisition handler called from application main loop.
- * Manages the complete data flow from ADS devices to BLE transmission.
+ * ADS1298_A and ADS1298_B each have their own independent DRDY interrupt,
+ * but both are held until the other has also signaled ready -- neither
+ * device's SPI interface is touched until both are confirmed ready.
  */
 void process_ads_data(void) {
-  //LOG_INF("Processing ADS data...");
-  if (ads_data_ready) {
-    //LOG_INF("ADS DATA READY interrupt received");
-    // Clear flag first to avoid missing next interrupt
-    ads_data_ready = false;
-    // clear the ADS A - B done flag
-    ads_a_and_b_done = false;
+  /* Wait until BOTH devices have signaled their own DRDY before touching
+   * either one's SPI interface -- unlike servicing each independently the
+   * moment its own flag sets, this guarantees we never assert CS/clock a
+   * device while its internal conversion could still be in progress. */
+  if (ads_a_data_ready && ads_b_data_ready) {
+    ads_a_data_ready = false;
+    ads_b_data_ready = false;
 
-    // Process received data as needed
     if (ads_get_function() == ADS_READ) {
-      if (!drdy_served) {
+      if (!ads_a_served || !ads_b_served) {
         ads_set_function(ADS_STOP);
-      } 
-      else {
-        drdy_served = false;
+      } else {
+        // A and B are read back-to-back below; keep SPI_A's owner pinned to
+        // ADS across that gap so WiFi/SD can't grab the bus between them
+        // (see ads_a_and_b_done's doc comment).
+        ads_a_and_b_done = false;
 
+        ads_a_served = false;
         spi_xfer_done = false;
         ads_to_read = ADS1298_A;
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_A);
         while (spi_xfer_done == false)
           ;
+
+        // Must be set before kicking off B, not after its busy-wait below:
+        // B's completion ISR (spi_a.c) reads this flag to decide whether to
+        // release SPI_A's owner, and it can fire before this thread resumes.
+        ads_a_and_b_done = true;
+
+        ads_b_served = false;
         spi_xfer_done = false;
         ads_to_read = ADS1298_B;
-        // Must be set before kicking off B, not after its busy-wait below:
-        // B's completion ISR (spi_a.c) reads this flag to release SPI_A's
-        // owner, and it can fire before this thread resumes.
-        ads_a_and_b_done = true;
-        //LOG_INF("ADS A and B set to true...");
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_B);
         while (spi_xfer_done == false)
           ;
       }
+    }
+
+    uint32_t now = k_cycle_get_32();
+    uint32_t a_latency_us = k_cyc_to_us_floor32(now - ads_a_drdy_cycles);
+    uint32_t b_latency_us = k_cyc_to_us_floor32(now - ads_b_drdy_cycles);
+    if (a_latency_us > ADS_DRDY_LATENCY_WARN_US) {
+      //LOG_WRN("A DRDY serviced after %u us (waited for B)", a_latency_us);
+    }
+    if (b_latency_us > ADS_DRDY_LATENCY_WARN_US) {
+      //LOG_WRN("B DRDY serviced after %u us (waited for A)", b_latency_us);
     }
   }
   k_sleep(K_USEC(1));

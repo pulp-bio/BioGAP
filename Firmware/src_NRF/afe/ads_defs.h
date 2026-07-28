@@ -84,6 +84,9 @@
 /** @brief Bytes per EXG sample (ADS_A + ADS_B + counter_extra + reserved) */
 #define EXG_BYTES_PER_SAMPLE 50
 
+/** @brief Bytes per single ADS1298 data block within a sample (8 channels x 3 bytes) */
+#define EXG_ADS_BLOCK_BYTES 24
+
 /** @brief Index where sample data begins (after header + counter + timestamp) */
 #define EXG_SAMPLE_DATA_START 7
 

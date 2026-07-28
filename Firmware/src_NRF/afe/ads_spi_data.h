@@ -82,20 +82,25 @@ extern uint8_t counter_extra;
 extern volatile bool spi_xfer_done;
 
 /**
- * @brief Data ready interrupt flag
+ * @brief Data ready interrupt flags
  *
- * Set by DRDY GPIO interrupt when new ADC data is available. Cleared
- * by process_ads_data() after reading.
+ * Set independently by each device's own DRDY GPIO interrupt when new ADC
+ * data is available. Cleared by process_ads_data() after reading. ADS1298_A
+ * and ADS1298_B are no longer assumed to share timing, so each gets its own
+ * flag.
  */
-extern volatile bool ads_data_ready;
+extern volatile bool ads_a_data_ready;
+extern volatile bool ads_b_data_ready;
 
 /**
- * @brief DRDY serviced flag
+ * @brief DRDY serviced flags
  *
- * Tracks whether the previous DRDY interrupt was serviced. If false when
- * new DRDY arrives, indicates data overrun and acquisition is stopped.
+ * Tracks whether the previous DRDY interrupt for each device was serviced.
+ * If false when a new DRDY arrives for that device, indicates data overrun
+ * and acquisition is stopped.
  */
-extern bool drdy_served;
+extern bool ads_a_served;
+extern bool ads_b_served;
 
 /**
  * @brief BLE packet ready flag
@@ -125,11 +130,12 @@ extern volatile bool ads_to_read;
 void ads_spim_handler_done(void);
 
 /**
- * @brief DRDY interrupt callback
+ * @brief DRDY interrupt callbacks
  *
- * Called from GPIO interrupt to signal new data availability.
+ * Called from each device's GPIO interrupt to signal new data availability.
  */
-void ads_drdy_callback(void);
+void ads_drdy_callback_a(void);
+void ads_drdy_callback_b(void);
 
 /**
  * @brief Process ADS1298 data when DRDY interrupt occurs

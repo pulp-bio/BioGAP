@@ -148,7 +148,9 @@ int ads_dr_read();
  * 4. Manages packet counters and triggers
  *
  * @note IMU data is now sent independently via sensors/imu/imu_appl.c
- * @note This function checks the ads_data_ready flag set by the DRDY interrupt
+ * @note ADS1298_A and ADS1298_B each have their own DRDY interrupt
+ *       (ads_a_data_ready / ads_b_data_ready), but neither is read until
+ *       BOTH have signaled ready
  */
 void process_ads_data();
 

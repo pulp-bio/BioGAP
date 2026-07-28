@@ -56,6 +56,9 @@ LOG_MODULE_REGISTER(ads_spi_hw, LOG_LEVEL_INF);
 /** @brief Data Ready pin for ADS1298_A */
 #define ADS_A_DR_NODE DT_NODELABEL(gpio_ads1298_a_dr)
 
+/** @brief Data Ready pin for ADS1298_B */
+#define ADS_B_DR_NODE DT_NODELABEL(gpio_ads1298_b_dr)
+
 /** @brief Chip Select pin for ADS1298_A */
 #define CS_A_NODE DT_NODELABEL(gpio_ads1298_a_spi_cs)
 
@@ -81,6 +84,9 @@ static const struct gpio_dt_spec gpio_dt_ads1298_start_pin = GPIO_DT_SPEC_GET(AD
 /** @brief ADS1298_A data ready pin GPIO spec */
 static const struct gpio_dt_spec gpio_dt_ads1298_a_dr = GPIO_DT_SPEC_GET(ADS_A_DR_NODE, gpios);
 
+/** @brief ADS1298_B data ready pin GPIO spec */
+static const struct gpio_dt_spec gpio_dt_ads1298_b_dr = GPIO_DT_SPEC_GET(ADS_B_DR_NODE, gpios);
+
 /*==============================================================================
  * SPI Configuration
  *============================================================================*/
@@ -89,23 +95,26 @@ static const struct gpio_dt_spec gpio_dt_ads1298_a_dr = GPIO_DT_SPEC_GET(ADS_A_D
  * Private Functions - Interrupt Callbacks
  *============================================================================*/
 
-/** @brief GPIO callback data structure for DRDY interrupt */
+/** @brief GPIO callback data structures for each device's DRDY interrupt */
 static struct gpio_callback ads1298_a_dr_cb_data;
+static struct gpio_callback ads1298_b_dr_cb_data;
 
 /**
- * @brief GPIO callback for ADS1298 data ready interrupt
+ * @brief GPIO callbacks for ADS1298 data ready interrupts
  *
- * Invoked by GPIO subsystem when DRDY pin goes active. Sets flag for
- * main loop processing and increments debug counter.
+ * Invoked by GPIO subsystem when a DRDY pin goes active. Sets the
+ * corresponding device's flag for main loop processing.
  *
  * @param[in] dev   GPIO device (unused)
  * @param[in] cb    Callback structure (unused)
  * @param[in] pins  Pin mask that triggered interrupt (unused)
  *
  * @note Runs in interrupt context - keep processing minimal
- * @note Both ADS devices share this DRDY signal (synchronized)
+ * @note ADS1298_A and ADS1298_B each have their own DRDY pin/callback --
+ *       they are no longer assumed to share timing
  */
 static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
+static void cb_ads_b_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins);
 
 /*==============================================================================
  * Public Functions - Hardware Initialization
@@ -178,11 +187,12 @@ int init_spi() {
 int ads_dr_read() { return gpio_pin_get_dt(&gpio_dt_ads1298_a_dr); }
 
 /**
- * @brief Initialize data ready (DRDY) GPIO interrupt
+ * @brief Initialize data ready (DRDY) GPIO interrupts for ADS1298_A and _B
  *
- * Configures the DRDY pin for interrupt-driven data acquisition.
- * The DRDY pin is shared between both ADS1298 devices since they
- * are synchronized via the START pin.
+ * Configures both DRDY pins for interrupt-driven data acquisition. Both
+ * devices share a synchronized START pin, but their DRDY pins are handled
+ * independently -- clock drift between the two chips means one can signal
+ * ready before the other, so each is read only once its own DRDY fires.
  *
  * DRDY characteristics:
  * - Active low signal
@@ -193,20 +203,20 @@ int ads_dr_read() { return gpio_pin_get_dt(&gpio_dt_ads1298_a_dr); }
  * @return 0 on success, -1 on error
  */
 int ads_dr_init() {
-  // Initialize the data ready pin
+  // Initialize the data ready pin for ADS1298_A
   if (!device_is_ready(gpio_dt_ads1298_a_dr.port)) {
-    LOG_ERR("ADS1298 DRDY GPIO port not ready");
+    LOG_ERR("ADS1298 DRDY A GPIO port not ready");
     return -1;
   }
   if (gpio_pin_configure_dt(&gpio_dt_ads1298_a_dr, GPIO_INPUT) < 0) {
-    LOG_ERR("ADS1298 DRDY GPIO init error");
+    LOG_ERR("ADS1298 DRDY A GPIO init error");
     return -1;
   }
   // Enable interrrupt
   int ret;
   ret = gpio_pin_interrupt_configure_dt(&gpio_dt_ads1298_a_dr, GPIO_INT_EDGE_TO_ACTIVE);
   if (ret < 0) {
-    LOG_ERR("ADS1298 DRDY GPIO interrupt enable error");
+    LOG_ERR("ADS1298 DRDY A GPIO interrupt enable error");
     return -1;
   }
 
@@ -215,9 +225,33 @@ int ads_dr_init() {
   // Add the callback function by calling gpio_add_callback()
   ret = gpio_add_callback(gpio_dt_ads1298_a_dr.port, &ads1298_a_dr_cb_data);
   if (ret < 0) {
-    LOG_ERR("ADS1298 DRDY GPIO interrupt enable error");
+    LOG_ERR("ADS1298 DRDY A GPIO interrupt enable error");
     return -1;
   }
+
+  // Initialize the data ready pin for ADS1298_B
+  if (!device_is_ready(gpio_dt_ads1298_b_dr.port)) {
+    LOG_ERR("ADS1298 DRDY B GPIO port not ready");
+    return -1;
+  }
+  if (gpio_pin_configure_dt(&gpio_dt_ads1298_b_dr, GPIO_INPUT) < 0) {
+    LOG_ERR("ADS1298 DRDY B GPIO init error");
+    return -1;
+  }
+  ret = gpio_pin_interrupt_configure_dt(&gpio_dt_ads1298_b_dr, GPIO_INT_EDGE_TO_ACTIVE);
+  if (ret < 0) {
+    LOG_ERR("ADS1298 DRDY B GPIO interrupt enable error");
+    return -1;
+  }
+
+  gpio_init_callback(&ads1298_b_dr_cb_data, cb_ads_b_dr, BIT(gpio_dt_ads1298_b_dr.pin));
+  ret = gpio_add_callback(gpio_dt_ads1298_b_dr.port, &ads1298_b_dr_cb_data);
+  if (ret < 0) {
+    LOG_ERR("ADS1298 DRDY B GPIO interrupt enable error");
+    return -1;
+  }
+
+  LOG_INF("ADS1298 DRDY A and B GPIO interrupts initialized");
 
   return 0;
 }
@@ -271,5 +305,9 @@ void ads_spim_transfer_complete(void) {
 }
 
 static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
-  ads_drdy_callback();
+  ads_drdy_callback_a();
+}
+
+static void cb_ads_b_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {
+  ads_drdy_callback_b();
 }

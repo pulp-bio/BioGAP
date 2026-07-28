@@ -59,8 +59,8 @@ extern void wifi_sd_spim_transfer_complete(void);
 #endif
 
 /** @brief Set by ads_spi_data.c; true once the in-flight ADS transfer is
- *  the cycle's last one, so this handler knows when it's safe to release
- *  current_owner back to SPI_A_OWNER_NONE. */
+ *  the current A+B pair's last one, so this handler knows when it's safe
+ *  to release current_owner back to SPI_A_OWNER_NONE. */
 extern volatile bool ads_a_and_b_done;
 
 static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context) {
@@ -89,12 +89,13 @@ static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context)
       LOG_WRN("SPI_A transfer completed with no registered owner");
       break;
   }
-  // Make sure that ADS has completed transfers both from A and B
-  if ((current_owner == SPI_A_OWNER_ADS) & (!ads_a_and_b_done)){
+  // A and B are read as a back-to-back pair once both DRDYs fire (see
+  // process_ads_data()); keep the bus pinned to ADS between the two so
+  // WiFi/SD can't grab it in the gap, and only release once the pair
+  // is actually done.
+  if (current_owner == SPI_A_OWNER_ADS && !ads_a_and_b_done) {
     current_owner = SPI_A_OWNER_ADS;
-  }
-  else{
-    // No Owner, others can take the SPI bus 
+  } else {
     current_owner = SPI_A_OWNER_NONE;
   }
 }
