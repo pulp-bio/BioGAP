@@ -3,12 +3,15 @@
  *
  * File: main.c
  *
- * Last edited: 30.10.2025
+ * Last edited: 29.07.2026
  *
- * Copyright (c) 2024 ETH Zurich and University of Bologna
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
  *
  * Authors:
  * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
+ * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ * - Giusy Spacone (gspacone@iìis.ee.ethz.ch), ETH Zurich
+ * - Giovanni Pollo (giovanni.pollo@polito.it), Politecnico di Torino
  *
  * ----------------------------------------------------------------------
  * SPDX-License-Identifier: Apache-2.0
@@ -92,7 +95,7 @@ void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
   }
 }
 
-/* ExG acquisition is disturbed by I2C READ transactions from the PMIC
+/** @brief ExG acquisition is disturbed by I2C READ transactions from the PMIC
  * (measured with the CONFIG_PMIC_NOISE_TEST sweep: reads inject noise
  * bursts into EEG/EMG - the PMIC sinks the SDA pull-up current through its
  * die ground - while writes and AMUX/SAADC measurements are clean). While
@@ -100,6 +103,7 @@ void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
  * battery voltage/SoC/currents stay live, status flags and charger
  * operations are frozen until the stream stops. */
 static bool pmic_measurements_allowed(void) { return ads_get_function() != ADS_READ; }
+
 
 int main(void) {
   int ret = 0;
@@ -123,158 +127,168 @@ int main(void) {
   }
   LOG_INF("USB enabled");
 
-//  LOG_INF("Enabling charge...");
   pwr_charge_enable();
-  power_exg_on(1); 
-  /* Start the SDK power thread: refreshes the battery/charger telemetry
-   * cache every THREAD_PWR_UPDATE_PERIOD_MS (and on PMIC nIRQ) and
-   * re-applies the charger config periodically. Runs at the lowest
-   * priority and never touches the VDx/VAx rails. The LED rail stays off
-   * (CONFIG_PWR_START_LED_POWER=0) and the SDK long-press shutdown stays
-   * disabled in favour of the app's soft-reset -> factory-ship path
-   * (CONFIG_PWR_LONG_PRESS_KILL=0); both set in CMakeLists.txt. Started
-   * after pwr_charge_enable() so the periodic charger re-config re-applies
-   * the final charger settings. */
+
   pwr_set_measurement_gate(pmic_measurements_allowed);
   if (pwr_start()) {
     LOG_ERR("PWR Start failed!");
   }
 
+  #if defined(GAP9)
+    LOG_INF("Powering GAP9...");
+    gap9_pwr(true);
+    LOG_INF("GAP9 powered up");
+  #endif
 
-//  LOG_INF("Initializing ADS...");
-  ret = ads_dr_init();
 
-//  LOG_INF("Initializing SPI...");
-  ret = init_spi();
-  if (ret != 0) {
-    LOG_ERR("SPI init failed");
-    //halt
-    //while(1){};
-
+  // Initialize SPIA bus (SPIM4)
+  if (init_spi_a_bus() != 0) {
+    LOG_ERR("SPI_A bus init failed");
+    return -1;
   }
 
-  LOG_INF("Powering GAP9...");
- // gap9_pwr(true);
-  LOG_INF("GAP9 powered up");
-#if defined(CONFIG_SENSOR_EEG)
-  // Initialize EEG subsystem
-  LOG_INF("Initializing EEG subsystem...");
-  if (eeg_init() != 0) {
-    LOG_WRN("EEG initialization failed - EEG streaming disabled");
-  } else {
-    LOG_INF("EEG subsystem initialized");
-  }
-#endif
-#if defined(CONFIG_WI_FI)
-  LOG_INF("Initializing Wi-Fi/SD shield...");
-  ret = wifi_sd_shield_cs_init();
-  if (ret != 0) {
-    LOG_ERR("Wi-Fi/SD shield initialization failed");
-  }
-  ret = initial_handshake_nrf_esp();
-  if (ret != 0) {
-    LOG_ERR("Initial handshake with ESP32 failed - Wi-Fi communication not established");
-  } else {
-    LOG_INF("Wi-Fi/SD shield initialized");
-  }
-#else
-  struct uart_data_t *buf = k_malloc(sizeof(*buf));
-  LOG_INF("Starting BLE adverts...");
-  start_bluetooth_adverts();
-#endif
+
+  /* Power the enabled ExG boards when Wi-Fi shield is present. */
+  #if IS_ENABLED(CONFIG_WI_FI)
+
+  #if IS_ENABLED(CONFIG_SENSOR_EEG)
+      LOG_INF("Powering EEG rails (VA1/VD1)");
+      ret = power_exg_on(0);
+      if (ret != 0) {
+          LOG_ERR("Failed to power EEG rails: %d", ret);
+          return ret;
+      }
+  #endif
+
+  #if IS_ENABLED(CONFIG_SENSOR_EMG)
+      LOG_INF("Powering EMG rails");
+      ret = power_exg_on(1);
+      if (ret != 0) {
+          LOG_ERR("Failed to power EMG rails: %d", ret);
+          return ret;
+      }
+  #endif
+
+  #endif /* CONFIG_WI_FI */
 
 
-#if defined(CONFIG_DUMMY_SENSOR)
-  LOG_INF("Initializing Dummy Sensor...");
-  if (dummy_sensor_init() != 0) {
-    LOG_ERR("Dummy sensor initialization failed");
-  } else {
-    LOG_INF("Dummy sensor initialized");
-  }
-#endif
+  /* Initialize the shared ADS1298 interface. */
+  #if IS_ENABLED(CONFIG_SENSOR_EEG) || IS_ENABLED(CONFIG_SENSOR_EMG)
 
-/*    COMMENTED OUT FOR NOW 
-  // Initialize microphone
-  LOG_INF("Initializing microphone...");
-  //if (mic_init() != 0) {
-  //  LOG_WRN("Microphone initialization failed - mic streaming disabled");
-  //} else {
-  //  LOG_INF("Microphone initialized");
- // }
+      LOG_INF("Initializing ADS DRDY GPIOs...");
+      ret = ads_dr_init();
+      if (ret != 0) {
+          LOG_ERR("ADS DRDY GPIO initialization failed: %d", ret);
+          return ret;
+      }
 
-  // Initialize IMU (LSM6DSV16BX accelerometer + gyroscope)
-  LOG_INF("Initializing IMU...");
-  if (imu_init() != 0) {
-    LOG_WRN("IMU initialization failed - IMU streaming disabled");
-  } else {
-    LOG_INF("IMU initialized");
-  }
-*/
+      LOG_INF("Initializing ADS SPI pins...");
+      ret = init_ads_spi_pins();
+      if (ret != 0) {
+          LOG_ERR("ADS SPI pin initialization failed: %d", ret);
+          return ret;
+      }
 
-/* EEG and EMG can both be built into one image; the mode (unipolar vs
- * bipolar rails) is selected at runtime by the GUI start command, and
- * simultaneous streaming is rejected in eeg/emg_start_streaming(). */
+  #endif
 
 
+  #if IS_ENABLED(CONFIG_WI_FI)
 
-/*
-#if defined(CONFIG_SENSOR_EMG)
-  // Initialize EMG subsystem
-  LOG_INF("Initializing EMG subsystem...");
-  if (emg_init() != 0) {
-    LOG_WRN("EMG initialization failed - EMG streaming disabled");
-  } else {
-    LOG_INF("EMG subsystem initialized");
-  }
-#endif
+      LOG_INF("Initializing Wi-Fi/SD shield...");
+      ret = wifi_sd_shield_cs_init();
+      if (ret != 0) {
+          LOG_ERR("Wi-Fi/SD shield initialization failed: %d", ret);
+          return ret;
+      }
 
-#if defined(CONFIG_SENSOR_PPG_NEW)
-  // Initialize multi-PPG subsystem (MAXM86161 × N via TCA9548A MUX)
-  LOG_INF("Initializing PPG subsystem...");
-  if (ppg_new_init() != 0) {
-    LOG_WRN("PPG init failed - PPG streaming disabled");
-  } else {
-    LOG_INF("PPG subsystem initialized");
-  }
-#endif
+      ret = initial_handshake_nrf_esp();
+      if (ret != 0) {
+          LOG_ERR("Initial handshake with ESP32 failed: %d", ret);
+          return ret;
+      }
 
-#if defined(CONFIG_SENSOR_WULPUS)
-  // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
-  // Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
-  // incl. the 5 V boost) are powered on demand when the first WULPUS config
-  // arrives via BLE (see wulpus_set_msp_config), so they stay off during
-  // EEG/EMG-only sessions.
-  LOG_INF("Initializing WULPUS...");
-  wulpus_init();
-  LOG_INF("WULPUS initialized");
-#endif
+      LOG_INF("Wi-Fi/SD shield initialized");
+
+  #else
+
+      struct uart_data_t *buf = k_malloc(sizeof(*buf));
+      if (buf == NULL) {
+          LOG_ERR("Failed to allocate UART data buffer");
+          return -ENOMEM;
+      }
+
+      LOG_INF("Starting BLE advertisements...");
+      start_bluetooth_adverts();
+
+  #endif
+
+
+  #if defined(CONFIG_DUMMY_SENSOR)
+    LOG_INF("Initializing Dummy Sensor...");
+    if (dummy_sensor_init() != 0) {
+      LOG_ERR("Dummy sensor initialization failed");
+    } else {
+      LOG_INF("Dummy sensor initialized");
+    }
+  #endif
+
+
+    // Initialize microphone
+    LOG_INF("Initializing microphone...");
+    if (mic_init() != 0) {
+     LOG_WRN("Microphone initialization failed - mic streaming disabled");
+    } else {
+    LOG_INF("Microphone initialized");
+    }
+
+  
+    // Initialize IMU (LSM6DSV16BX accelerometer + gyroscope)
+    LOG_INF("Initializing IMU...");
+    if (imu_init() != 0) {
+      LOG_WRN("IMU initialization failed - IMU streaming disabled");
+    } else {
+      LOG_INF("IMU initialized");
+    }
+  
+
+
+  #if defined(CONFIG_SENSOR_PPG_NEW)
+    // Initialize multi-PPG subsystem (MAXM86161 × N via TCA9548A MUX)
+    LOG_INF("Initializing PPG subsystem...");
+    if (ppg_new_init() != 0) {
+      LOG_WRN("PPG init failed - PPG streaming disabled");
+    } else {
+      LOG_INF("PPG subsystem initialized");
+    }
+  #endif
+
+  #if defined(CONFIG_SENSOR_WULPUS)
+    // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
+    // Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
+    // incl. the 5 V boost) are powered on demand when the first WULPUS config
+    // arrives via BLE (see wulpus_set_msp_config), so they stay off during
+    // EEG/EMG-only sessions.
+    LOG_INF("Initializing WULPUS...");
+    wulpus_init();
+    LOG_INF("WULPUS initialized");
+  #endif
 
   // Initialize inter-board synchronization
+
   LOG_INF("Initializing board sync...");
-  //  if (board_sync_init() != 0) {
-  //   LOG_WRN("Board sync initialization failed - inter-board sync disabled");
-  //} else {
-  //   LOG_INF("Board sync initialized");
-    //}
+    if (board_sync_init() != 0) {
+      LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+    } 
+    else {
+      LOG_INF("Board sync initialized");
+      }
 
 
-  */
-  // sleep a bit
-  // k_sleep(K_MSEC(5000));
-  // ret = handshake2();
-  // if (ret != 0) {
-  //   LOG_ERR("Handshake2 with ESP32 failed - Wi-Fi communication not established");
-  // } else {
-  //   LOG_INF("Handshake2 with ESP32 successful");
-  // }
-
-  // do another handshake with the ESP now
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
     //gpio_pin_set_dt(&ppg_sync_gpio, 1);
     //k_msleep(1000);
     //gpio_pin_set_dt(&ppg_sync_gpio, 0);
-
 
     if (flag_isr_soft_reset) {
       // Soft reset the device

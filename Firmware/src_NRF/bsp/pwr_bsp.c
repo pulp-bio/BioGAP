@@ -154,6 +154,17 @@ int pwr_bsp_init() {
   return 0;
 }
 
+/**  @brief Start the SDK power thread */
+  /* Start the SDK power thread: refreshes the battery/charger telemetry
+    * cache every THREAD_PWR_UPDATE_PERIOD_MS (and on PMIC nIRQ) and
+    * re-applies the charger config periodically. Runs at the lowest
+    * priority and never touches the VDx/VAx rails. The LED rail stays off
+    * (CONFIG_PWR_START_LED_POWER=0) and the SDK long-press shutdown stays
+    * disabled in favour of the app's soft-reset -> factory-ship path
+    * (CONFIG_PWR_LONG_PRESS_KILL=0); both set in CMakeLists.txt. Started
+    * after pwr_charge_enable() so the periodic charger re-config re-applies
+    * the final charger settings. */
+
 int pwr_charge_enable()
 {
     struct max77654_conf *pmic_conf = &pmic_h.conf;

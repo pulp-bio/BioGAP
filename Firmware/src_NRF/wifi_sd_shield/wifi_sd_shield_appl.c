@@ -134,7 +134,7 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3)
 }
 
 /**
- * @brief Add Data to Send Buffer
+ * @brief Add Data to ESP Send Buffer
  *
  * Enqueues data into the send message queue for transmission to ESP32.
  * Supports variable packet sizes.

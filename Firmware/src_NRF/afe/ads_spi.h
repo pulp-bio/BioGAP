@@ -48,18 +48,10 @@ extern bool ads_initialized;
  *============================================================================*/
 
 /**
- * @brief Initialize SPI peripheral and GPIO pins
- *
- * Configures the SPIM instance with appropriate settings for ADS1298 communication:
- * - SPI Mode 1 (CPOL=0, CPHA=1)
- * - 4 MHz clock frequency
- * - MSB first bit order
- * - Separate CS pins for each ADS1298 device
- * - START pin for synchronized acquisition
- *
+ * @brief Initialize GPIO pins for ADS1298 devices
  * @note Must be called before any other ADS functions
  */
-int init_spi();
+int init_ads_spi_pins();
 
 /*==============================================================================
  * Function Declarations - Data Acquisition Control

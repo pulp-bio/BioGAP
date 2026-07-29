@@ -121,28 +121,18 @@ static void cb_ads_b_dr(const struct device *dev, struct gpio_callback *cb, uint
  *============================================================================*/
 
 /**
- * @brief Initialize SPI peripheral and GPIO pins for ADS1298 communication
+ * @brief Initialize GPIO pins for ADS1298 communication
  *
  * Performs complete hardware initialization:
- * 1. Brings up the shared SPI_A bus (see spi/spi_a.h) if not already done
- * 2. Initializes chip select pins for both ADS devices
- * 3. Initializes START pin for synchronized acquisition
+ * 1. Initializes chip select pins for both ADS devices
+ * 2. Initializes START pin for synchronized acquisition
  *
- * SPI Mode 1 timing:
- * - CPOL = 0 (clock idle low)
- * - CPHA = 1 (data sampled on rising edge, shifted on falling edge)
  *
  * @note This function must be called before any other ADS functions.
  *       Errors are logged but not returned to allow graceful degradation.
  */
-int init_spi() {
-  /* Bring up the shared SPI_A (SPIM4) peripheral. Safe to call even if
-   * another shield on SPI_A (e.g. WiFi/SD) already brought it up first --
-   * whichever consumer initializes first wins; nrfx_spim_init() is not
-   * called a second time here. */
-  if (init_spi_a_bus() != 0) {
-    return -1;
-  }
+int init_ads_spi_pins() {
+
 
   // Initialize SPI CS pin for ADS A
   if (!device_is_ready(gpio_dt_ads1298_a_cs.port)) {

@@ -457,8 +457,7 @@ void wulpus_init(void)
     config.bit_order    = NRF_SPIM_BIT_ORDER_MSB_FIRST;
     config.irq_priority = WULPUS_SPI_INT_PRIO;
 
-    nrfx_err_t err = nrfx_spim_init(&wulpus_spim, &config,
-                                     spim_event_handler, NULL);
+    nrfx_err_t err = nrfx_spim_init(&wulpus_spim, &config, spim_event_handler, NULL);
     if (err != NRFX_SUCCESS) {
         LOG_ERR("nrfx_spim_init failed: 0x%x", err);
         return;
