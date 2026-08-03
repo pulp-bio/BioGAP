@@ -50,6 +50,9 @@ uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the cur
 #include "sensors/wulpus/wulpus_appl.h"
 #endif
 
+uint8_t ads_config[5] = {6, 5, 2, 4, 0x10};      // For Exg Data. Hard-coded config with square wave
+
+
 LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
 
 /**
@@ -67,6 +70,7 @@ LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
  */
 void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   uint8_t cmd = data[0];
+  
   switch (cmd) {
 
   case REQUEST_BATTERY_STATE:
@@ -221,6 +225,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #else
     LOG_WRN("Dummy sensor not built (CONFIG_DUMMY_SENSOR=n) - ignoring STOP_DUMMY_STREAMING");
   #endif
+
   #if defined CONFIG_WI_FI
     /* TODO: print WiFi transport stats */
   #else
@@ -231,6 +236,10 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EEG_STREAMING:
     LOG_INF("Ping START_EEG_STREAMING");
+     // the other bytes are the ads configuration
+    
+    memcpy(ads_config, data + 1, 5);
+    LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
 
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset BLE packet counters for new session */
@@ -240,7 +249,8 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     }
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
-    eeg_start_streaming();
+  
+    eeg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EEG_STREAMING:
@@ -255,7 +265,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EMG_STREAMING:
     LOG_INF("Ping START_EMG_STREAMING");
-  #ifndef CONFIG_WI_FI
+
+    // the other bytes are the ads configuration
+
+    memcpy(ads_config, data + 1, 5);
+    LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
+  
+  
+    #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset packet counters for new session */
   #else
     if (nrf_esp_comm_state != NRF_ESP_IDLE) {
@@ -264,7 +281,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
     LOG_INF("Starting EMG streaming");
-    emg_start_streaming();
+    emg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EMG_STREAMING:
@@ -337,6 +354,13 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     /* Any bytes after the command code are forwarded as MSP430 config */
     wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
     #endif
+    
+    #if defined (CONFIG_WI_FI)
+      if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+          LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+      }
+      nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
+    #endif
     break;
 
   case STOP_WULPUS_STREAMING:
@@ -365,7 +389,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     #endif
     sync_begin(2);               /* Setup sync barrier for 2 subsystems (EEG + MIC) */
     mic_start_streaming();
-    eeg_start_streaming();
+    eeg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EEG_MIC_STREAMING:
@@ -391,7 +415,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #endif
     sync_begin(3);               /* Setup sync barrier for 2 subsystems (EEG + MIC + IMU) */
     mic_start_streaming();
-    eeg_start_streaming();
+    eeg_start_streaming(&ads_config[0]);
     imu_start_streaming();
     break;
 
