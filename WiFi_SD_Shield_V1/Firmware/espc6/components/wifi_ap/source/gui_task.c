@@ -221,7 +221,7 @@ void tx_to_gui(void *pvParameters)
 
                 // Check if we have a WULPUS packet 
                 if(item[0] == WULPUS_HDR_XFER_0 || item[0] == WULPUS_HDR_XFER_1 || item[0] == WULPUS_HDR_XFER_2 || item[0] == WULPUS_HDR_XFER_3){
-                    ESP_LOGI(GUI_TAG, "Received WULPUS packet with header: 0x%02X", item[0]);
+                    //ESP_LOGI(GUI_TAG, "Received WULPUS packet with header: 0x%02X", item[0]);
                     // Add bytes for TCP packet check
                     uint8_t pckt_tmp[item_size+2];
                     pckt_tmp[0] = BIOGUI_CHECK_HEADER;

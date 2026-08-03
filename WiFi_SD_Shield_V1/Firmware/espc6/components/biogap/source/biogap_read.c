@@ -116,6 +116,13 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+static inline bool validate_nrf_header(uint8_t header_byte)
+{
+    return (header_byte == NRF_EXG_HEADER || header_byte == WULPUS_HDR_XFER_0 ||
+            header_byte == WULPUS_HDR_XFER_1 || header_byte == WULPUS_HDR_XFER_2 ||
+            header_byte == WULPUS_HDR_XFER_3);
+}
+
 // =============================================================================
 // HELPER: Validate packet markers
 // =============================================================================
@@ -123,20 +130,15 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
 static inline bool is_valid_packet(const uint8_t *data, const size_t packet_size)
 {
 
+    // check header byte
     /* Expand to match with the expected packet format*/
     if (data[0] == NRF_EXG_HEADER && data[packet_size - 1] == NRF_EXG_TAILER){
         /*Header and tailer for ExG data streaming*/
         return true;
     }
-
-    // elif(data[0] == WULPUS_HDR_XFER_0){
-    //     return true;}
-    // elif(data[0] == WULPUS_HDR_XFER_1){
-    //     return true;}
-    // elif(data[0] == WULPUS_HDR_XFER_2){
-    //     return true;}
-    // elif(data[0] == WULPUS_HDR_XFER_3){
-    //     return true;}
+    else{
+        return validate_nrf_header(data[0]);
+    }
 
     return false; 
 }
@@ -247,7 +249,7 @@ static esp_err_t enter_stop_quiesce_state(void)
     bool stop_delivered = false;
     uint8_t send_stop_command_count = 0;
     bool stop_ack_received = false;
-    
+
     while(stop_ack_received == false) {
         ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
         if (ret == ESP_OK) {
