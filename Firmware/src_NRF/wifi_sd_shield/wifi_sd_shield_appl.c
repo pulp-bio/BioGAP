@@ -56,6 +56,49 @@ K_SEM_DEFINE(handshake_complete_sem, 0, 2);
  * @brief Process ESP data when DRDY interrupt occurs 
  *
 */
+// void process_esp_data(void) {
+//   // LOG_INF("Processing ESP data...");
+//   if (esp_data_ready) {
+//     // LOG_INF("ESP DATA READY interrupt received");
+//     // Clear flag first to avoid missing next interrupt
+//     esp_data_ready = false;
+//     // Allocate buffer for incoming data. Need to allocate 4 Bytes for ESP DMA transaction
+
+//     bool ack_rcv = false;
+//     while(!ack_rcv){
+//     //if (first_esp_data_ready==true){
+//         uint8_t spi_tx_buf[4] = {0xBB, 0xBB, 0xBB, 0xBB}; // Dummy data to clock out the ESP response
+//         uint8_t spi_rx_buf[4] = {0x00, 0x00, 0x00, 0x00};
+//         (void)spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
+//         LOG_INF("SPI transaction with ESP completed, received: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
+//         // reset the flag
+//         first_esp_data_ready = false;
+//         // Check if expected bytes match
+//         if (spi_rx_buf[0] == ESP_SPI_HEADER && spi_rx_buf[3] == ESP_SPI_TAILER) {
+//             LOG_INF("Received valid data from ESP: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
+//             handle_connectivity_command(&spi_rx_buf[1], 1);
+//             ack_rcv = true;
+//             }
+//         else{
+//             LOG_WRN("Received invalid data from ESP, ignoring: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
+//             // halt the system
+//             if (nrf_esp_comm_state == SEND_TO_ESP) {
+//                 LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
+//             }
+//             else{
+//                 LOG_ERR("NRF-ESP comm state is not SEND_TO_ESP (current state: %d), but received invalid data from ESP - NRF53 HALTED", nrf_esp_comm_state);
+//             }
+            
+//             //while (1) {k_sleep(K_FOREVER);} // before
+//         }
+//         serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding
+
+//         }
+//   }
+
+//   k_sleep(K_USEC(1));
+// }
+
 void process_esp_data(void) {
   // LOG_INF("Processing ESP data...");
   if (esp_data_ready) {
@@ -64,40 +107,50 @@ void process_esp_data(void) {
     esp_data_ready = false;
     // Allocate buffer for incoming data. Need to allocate 4 Bytes for ESP DMA transaction
 
-    bool ack_rcv = false;
-    while(!ack_rcv){
+    bool cmd_processed = false;
+
+    while(!cmd_processed){
     //if (first_esp_data_ready==true){
-        uint8_t spi_tx_buf[4] = {0xBB, 0xBB, 0xBB, 0xBB}; // Dummy data to clock out the ESP response
-        uint8_t spi_rx_buf[4] = {0x00, 0x00, 0x00, 0x00};
+    
+        uint8_t spi_tx_buf[ESP_PCKT_MAX_SIZE]; // Dummy data to clock out the ESP response
+        uint8_t spi_rx_buf[ESP_PCKT_MAX_SIZE]; 
+        for (uint16_t i = 0; i < ESP_PCKT_MAX_SIZE; i++) {
+            spi_tx_buf[i] = 0xBB; // Fill the rest of the buffer with zeros
+            spi_rx_buf[i] = 0x00; // Initialize the receive buffer to zeros
+        }
+        
         (void)spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
         LOG_INF("SPI transaction with ESP completed, received: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
         // reset the flag
-        first_esp_data_ready = false;
-        // Check if expected bytes match
-        if (spi_rx_buf[0] == ESP_SPI_HEADER && spi_rx_buf[3] == ESP_SPI_TAILER) {
-            LOG_INF("Received valid data from ESP: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-            handle_connectivity_command(&spi_rx_buf[1], 1);
-            ack_rcv = true;
-            }
+        //first_esp_data_ready = false;
+        // Check if expected bytes match (header)
+
+        // Check the header byte
+        if(spi_rx_buf[0] != ESP_SPI_HEADER){
+            LOG_WRN("SPI transaction response has invalid header: received header 0x%02X, expected 0x%02X", spi_rx_buf[0], ESP_SPI_HEADER);
+            LOG_WRN("=== SPI FAILURE - NRF53 HALTED ===");
+            //while (1) {k_sleep(K_FOREVER);}
+        }
         else{
-            LOG_WRN("Received invalid data from ESP, ignoring: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-            // halt the system
-            if (nrf_esp_comm_state == SEND_TO_ESP) {
-                LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
+            uint8_t payload_size = spi_rx_buf[1]; // The second byte indicates the payload size
+            // Check the tailer byte based on the payload size
+            if(spi_rx_buf[2 + payload_size] != ESP_SPI_TAILER){
+                LOG_WRN("SPI transaction response has invalid tailer: received tailer 0x%02X, expected 0x%02X", spi_rx_buf[2 + payload_size], ESP_SPI_TAILER);
+                LOG_WRN("=== SPI FAILURE - NRF53 HALTED ===");
+                //while (1) {k_sleep(K_FOREVER);}
             }
             else{
-                LOG_ERR("NRF-ESP comm state is not SEND_TO_ESP (current state: %d), but received invalid data from ESP - NRF53 HALTED", nrf_esp_comm_state);
+                handle_connectivity_command(&spi_rx_buf[2], payload_size); // Process the payload
+                cmd_processed = true;
             }
-            
-            //while (1) {k_sleep(K_FOREVER);} // before
         }
         serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding
-
         }
   }
 
   k_sleep(K_USEC(1));
 }
+
 
 
 /** @brief SPI receiver thread for NRF and ESP communication*/
@@ -185,7 +238,7 @@ void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
 }
 
 
-/** @brief SPI sender thread for NRF and ESP communication*/
+/** @brief SPI sender thread for NRF and ESP communication during actual streaming*/
 void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
 {
     /* Enbale this thread only if the communication has bee established*/

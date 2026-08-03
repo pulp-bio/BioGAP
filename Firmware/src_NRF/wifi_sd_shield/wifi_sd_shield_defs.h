@@ -105,7 +105,7 @@
  *  matters. */
 #define NRF_STOP_ACK_MASK 0x80
 
-#define ESP_PCKT_MAX_SIZE 820           // Set for now equal to the max size of WULPUS packets    
+#define ESP_PCKT_MAX_SIZE 250           // Set for now equal to the max size of WULPUS packets    
 #define ESP_SEND_QUEUE_SIZE 4           // Max number of packets that can be queued for sending to ESP. 
                                         // Adjust as needed based on expected traffic and memory constraints.     
 /** @brief Boolean to verify successful connection between NRF and ESP */

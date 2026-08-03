@@ -193,28 +193,53 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
     //check if the received data contain an implicit stop command from ESP
     if(spi_rx_buf[2] == ESP_STOP_COMMAND){
         LOG_INF("Received ESP STOP command, resetting NRF-ESP communication state and waiting for stop sensor command");
+        /* Save the opcode before spi_rx_buf gets reused below as the RX
+        * buffer for the ack transaction -- otherwise handle_connectivity_command()
+        * ends up dispatching whatever the ESP responded with to the ACK,
+        * not the original STOP request's opcode byte. */
+
+        uint8_t stop_opcode = spi_rx_buf[3];
+        handle_connectivity_command(&stop_opcode, 1);
+        
+
         // reset state to idle to block sending data to ESP
         nrf_esp_comm_state = NRF_ESP_IDLE;
-        /* Save the opcode before spi_rx_buf gets reused below as the RX
-         * buffer for the ack transaction -- otherwise handle_connectivity_command()
-         * ends up dispatching whatever the ESP responded with to the ACK,
-         * not the original STOP request's opcode byte. */
-        uint8_t stop_opcode = spi_rx_buf[3];
+
 
         // Explicitly acknowledge STOP with a dedicated transaction whose
         // header byte has NRF_STOP_ACK_MASK set.
+        //
+        // Retried: this transceive races with the ADS read thread on the
+        // same SPI_A bus (same thread priority, CONFIG_TIMESLICING is off,
+        // and process_ads_data() busy-spins on spi_xfer_done with no yield
+        // in between), so under real acquisition load a single attempt can
+        // miss spi_master_transceive()'s short post-handshake completion
+        // timeout even though nothing is actually wrong. The ESP has no
+        // fallback of its own here -- enter_stop_quiesce_state() just polls
+        // forever for this exact ack -- so silently giving up after one try
+        // left it waiting indefinitely. ads_stop() (via emg_stop_streaming(),
+        // already called above) should quiesce that contention within a
+        // sample period or two, so a handful of retries is normally enough.
         memset(spi_rx_buf, 0, send_len);
         uint8_t dummy_buff[send_len];
         memset(dummy_buff, 0, sizeof(dummy_buff));
         dummy_buff[0] = ESP_SPI_HEADER | NRF_STOP_ACK_MASK; // set the ack bit in the header
         dummy_buff[send_len - 1] = ESP_SPI_TAILER;
 
-        int ack_ret = spi_master_transceive(dummy_buff, spi_rx_buf, send_len);
-        if (ack_ret != 0) {
-            LOG_WRN("Failed to send STOP ack to ESP (ret=%d)", ack_ret);
-        }
+        int ack_ret;
+        int ack_attempts = 0;
+        const int max_ack_attempts = 50;
+        do {
+            ack_ret = spi_master_transceive(dummy_buff, spi_rx_buf, send_len);
+            if (ack_ret != 0) {
+                ack_attempts++;
+                LOG_WRN("Failed to send STOP ack to ESP (ret=%d), attempt %d/%d", ack_ret, ack_attempts, max_ack_attempts);
+            }
+        } while (ack_ret != 0 && ack_attempts < max_ack_attempts);
 
-        handle_connectivity_command(&stop_opcode, 1);
+        if (ack_ret != 0) {
+            LOG_ERR("Giving up on STOP ack to ESP after %d attempts", ack_attempts);
+        }
     }
 
 
