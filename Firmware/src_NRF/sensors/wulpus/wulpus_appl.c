@@ -51,6 +51,7 @@
  */
 
 #include "sensors/wulpus/wulpus_appl.h"
+#include "wifi_sd_shield/wifi_sd_shield_appl.h"
 #include "ble/ble_appl.h"
 #include "bsp/pwr_bsp.h"
 
@@ -343,6 +344,8 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
 #define WULPUS_META_TS_OFF   3U
 #define WULPUS_SPI_OFF       7U
 
+
+bool wulpus_cfg_sent = false;  // Global variable to track if the WULPUS config has been sent
 static void wulpus_ble_thread(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
@@ -379,8 +382,11 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
             ble_packet[0] = WULPUS_BLE_HDR_XFER_0;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 0].buffer, WULPUS_BYTES_PER_XFER);
 
-            #if defined(CONFIG_WIFI)
+            #if defined(CONFIG_WI_FI)
+                if (wulpus_cfg_sent) {
+                LOG_INF("Sending WULPUS frame %d to ESP", wulpus_frame_counter - 1);
                 add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                }
             #else
                 add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
@@ -390,8 +396,10 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
             ble_packet[0] = WULPUS_BLE_HDR_XFER_1;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 1].buffer, WULPUS_BYTES_PER_XFER);
 
-            #if defined(CONFIG_WIFI)
-                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #if defined(CONFIG_WI_FI)
+                if (wulpus_cfg_sent) {
+                    add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                }
             #else
                 add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
@@ -399,8 +407,10 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
             ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 2].buffer, WULPUS_BYTES_PER_XFER);
 
-            #if defined(CONFIG_WIFI)
-                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #if defined(CONFIG_WI_FI)
+                if (wulpus_cfg_sent) {
+                    add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                }
             #else
                 add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
@@ -409,8 +419,10 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
             ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 3].buffer, WULPUS_BYTES_PER_XFER);
 
-            #if defined(CONFIG_WIFI)
-                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #if defined(CONFIG_WI_FI)
+                if (wulpus_cfg_sent) {
+                    add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                }
             #else
                 add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
@@ -525,7 +537,7 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
      * the VD0 5 V boost must not run during EEG/EMG-only sessions
      * (switching noise; on battery it can desense the BLE radio). */
     static bool wulpus_rails_on = false;
-
+    LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d, last byte is %d", len, config[0], config[len - 1]);
     if (!wulpus_rails_on) {
         LOG_INF("Powering WULPUS rails (VA0/VD0/VD2)");
         if (wulpus_power_on() != 0) {
@@ -535,7 +547,7 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
         wulpus_rails_on = true;
         k_msleep(WULPUS_POWERUP_DELAY_MS);
     }
-
+    LOG_INF("WULPUS powered on");
     if (config != NULL && len > 0) {
         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
         LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d", len, config[0]);

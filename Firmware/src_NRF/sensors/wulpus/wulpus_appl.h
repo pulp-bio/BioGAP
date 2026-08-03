@@ -86,4 +86,5 @@ void wulpus_stop(void);
  */
 bool wulpus_is_streaming(void);
 
+extern bool wulpus_cfg_sent; 
 #endif /* WULPUS_APPL_H */

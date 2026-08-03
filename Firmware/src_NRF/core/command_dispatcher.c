@@ -40,6 +40,7 @@
 #if defined(CONFIG_WI_FI)
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
 #include "wifi_sd_shield/wifi_sd_shield_defs.h"
+#include <zephyr/logging/log.h>
 
 uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the current SPI packet from ESP
 #endif
@@ -358,14 +359,18 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
         // ESP relay accumulates the whole config+start sequence and sends it
         // as one control frame, so both packages are already back-to-back
         // in data[] -- no need to wait for a second, separate dispatch.
-        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
-        k_msleep(500);
-        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
-        LOG_INF("WULPUS config package sent to MSP430");
+
+        LOG_INF("WULPUS config package received, forwarding to wulpus_set_msp_config");
+
         if (nrf_esp_comm_state != NRF_ESP_IDLE) {
             LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
         }
         nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
+        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
+        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
+        LOG_INF("WULPUS config package forwarded to wulpus_set_msp_config");
+        wulpus_cfg_sent = true; // Set the flag to indicate that the WULPUS config has been sent to the MSP430
+
       #else
         // BLE streaming -- packet can be fragmented; the conf package
         // arrives later as its own separate dispatch, via default: below.
