@@ -27,13 +27,19 @@
  */
 
 #include <stdbool.h>
+#include <string.h>
 #include "gui_task.h"
 #include "common.h"
 #include "esp_log.h"
 #define GUI_TAG "[gui_utils.c]"
 
+/* Bytes accumulated so far for the in-progress config+start sequence (see
+ * the STATE_IDLE branch below). Distinct from rx_gui_data_len, which is
+ * only set once, to the final total, right when the accumulated sequence
+ * is relayed. */
+static size_t gui_accum_len = 0;
 
-/** @brief Validate and dispatch a single command byte received from BioGUI. */
+/** @brief Validate and dispatch a command chunk received from BioGUI. */
 esp_err_t parse_gui_command(uint8_t *buf, size_t len)
 {
     if (buf == NULL || len == 0) {
@@ -41,27 +47,51 @@ esp_err_t parse_gui_command(uint8_t *buf, size_t len)
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (len != 1) {
-        ESP_LOGW(GUI_TAG, "Ignoring non-command GUI frame, len=%u", (unsigned)len);
+    if (len > RX_FROM_GUI_BUF_SIZE) {
+        ESP_LOGW(GUI_TAG, "GUI frame too large (len=%u, max=%u), dropping", (unsigned)len, (unsigned)RX_FROM_GUI_BUF_SIZE);
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t command = buf[0];
-
-    switch (node_state) {
-        case STATE_IDLE:
-            rx_gui_data_to_fwd[0] = command; // copy the command to the forwarding buffer for the send_to_biogap task
-            xEventGroupSetBits(g_evt, B_START_CMD_RCV);
-            ESP_LOGI(GUI_TAG, "Received START command: %d", (unsigned)command);
-            break;
-        case STATE_STREAMING:
-            xEventGroupSetBits(g_evt, B_STOP_CMD_RPT_PENDING);
-            rx_gui_data_to_fwd[0] = command; // copy the command to the forwarding buffer for the send_to_biogap task
-            break;
-        default:
-            ESP_LOGW(GUI_TAG, "Unknown node state %d", (int)node_state);
-            return ESP_ERR_INVALID_STATE;
+    if (node_state == STATE_STREAMING) {
+        /* STOP-quiesce trigger only -- enter_stop_quiesce_state()
+         * (biogap_read.c) has its own complete delivery mechanism (stomping
+         * the bulk pool's tx buffers) and doesn't use the general relay/
+         * accumulation path below. Keeping these mutually exclusive by
+         * node_state avoids both ever retrieving completions at the same
+         * time on the same SPI host. */
+        memcpy(rx_gui_data_to_fwd, buf, len);
+        rx_gui_data_len = len;
+        xEventGroupSetBits(g_evt, B_STOP_CMD_RPT_PENDING);
+        return ESP_OK;
     }
 
+    /* STATE_IDLE: the ESP never interprets what an opcode means -- config
+     * commands (ADS settings, WULPUS conf, start, ...) all look the same to
+     * it. The GUI's whole config+start sequence can span multiple received
+     * chunks, so accumulate raw bytes into rx_gui_data_to_fwd across calls
+     * and only relay once GUI_CONFIG_END_MARKER arrives as its own,
+     * dedicated one-byte chunk (sent by the GUI after the full sequence).
+     * This keeps the whole sequence to exactly one control-frame relay
+     * (biogap_send.c's propagate_first_start_command_to_biogap_master())
+     * before streaming begins, so biogap_read.c can safely arm the bulk
+     * pre-queue pool right after that one relay is confirmed delivered,
+     * with nothing else ever competing for the same SPI slave queue slot. */
+    if (len == 1 && buf[0] == GUI_CONFIG_END_MARKER) {
+        rx_gui_data_len = gui_accum_len;
+        gui_accum_len = 0;
+        ESP_LOGI(GUI_TAG, "End of config sequence, relaying %u bytes to NRF", (unsigned)rx_gui_data_len);
+        xEventGroupSetBits(g_evt, B_START_CMD_RCV);
+        return ESP_OK;
+    }
+
+    if (gui_accum_len + len > RX_FROM_GUI_BUF_SIZE - 3) {
+        ESP_LOGE(GUI_TAG, "Accumulated GUI config would exceed %u bytes, dropping sequence",
+                 (unsigned)(RX_FROM_GUI_BUF_SIZE - 3));
+        gui_accum_len = 0;
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    memcpy(&rx_gui_data_to_fwd[gui_accum_len], buf, len);
+    gui_accum_len += len;
     return ESP_OK;
 }

@@ -33,8 +33,9 @@
 
 bool gui_connected = false;
 int gui_sock = -1;
-uint8_t rx_data_from_gui[RX_FROM_GUI_BUF_SIZE] = {0}; 
+uint8_t rx_data_from_gui[RX_FROM_GUI_BUF_SIZE] = {0};
 uint8_t rx_gui_data_to_fwd[RX_FROM_GUI_BUF_SIZE] = {0};
+size_t rx_gui_data_len = 0;
 TaskHandle_t rx_gui_task_handle = NULL;
 
 static bool start_reported = false;
@@ -207,17 +208,38 @@ void tx_to_gui(void *pvParameters)
         if(node_state == STATE_STREAMING){
             size_t item_size = 0;
             uint8_t *item = (uint8_t *)xRingbufferReceive(biogap_ringbuf, &item_size, portMAX_DELAY);
-            if(item != NULL){
-                uint16_t counter_rcv = (item[2] << 8) | item[1];
-                if(counter_rcv != (counter_rcv_prev + 1)){
-                    ESP_LOGW(GUI_TAG, "Missed packet(s) in ringbuffer: expected counter %d, got %d", counter_rcv_prev + 1, counter_rcv);
-                }
-                counter_rcv_prev = counter_rcv;
 
-                // send immediately to the gui
-                int sent = send_all(gui_sock, item, item_size);
-                if (sent < 0) {
-                    ESP_LOGE(GUI_TAG, "Failed to send data to GUI, dropping packet (errno=%d)", errno);
+            if(item != NULL){
+
+                if(item[0] == WULPUS_HDR_XFER_0 || item[0] == NRF_EXG_HEADER){
+                    uint16_t counter = (item[2] << 8) | item[1];
+                    if(counter != (counter_rcv_prev + 1)){
+                        ESP_LOGW(GUI_TAG, "Missed packet(s): expected counter %d, got %d", counter_rcv_prev + 1, counter);
+                    }
+                    counter_rcv_prev = counter;
+                }
+
+                // Check if we have a WULPUS packet 
+                if(item[0] == WULPUS_HDR_XFER_0 || item[0] == WULPUS_HDR_XFER_1 || item[0] == WULPUS_HDR_XFER_2 || item[0] == WULPUS_HDR_XFER_3){
+                    ESP_LOGI(GUI_TAG, "Received WULPUS packet with header: 0x%02X", item[0]);
+                    // Add bytes for TCP packet check
+                    uint8_t pckt_tmp[item_size+2];
+                    pckt_tmp[0] = BIOGUI_CHECK_HEADER;
+                    memcpy(&pckt_tmp[1], item, item_size);
+                    pckt_tmp[item_size+1] = BIOGUI_CHECK_TAILER;
+                    int sent = send_all(gui_sock, pckt_tmp, item_size+2);
+                    if (sent < 0) {
+                        ESP_LOGE(GUI_TAG, "Failed to send tmp WULPUS packet to GUI, dropping packet (errno=%d)", errno);
+                    }
+                }
+                
+                else{
+                    // EXG packet 
+                    // send immediately to the gui
+                    int sent = send_all(gui_sock, item, item_size);
+                    if (sent < 0) {
+                        ESP_LOGE(GUI_TAG, "Failed to send data to GUI, dropping packet (errno=%d)", errno);
+                    }
                 }
                 /* biogap_ringbuf is RINGBUF_TYPE_NOSPLIT, which requires items
                  * to be returned in the exact order they were received --
