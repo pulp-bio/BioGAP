@@ -51,7 +51,8 @@ uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the cur
 #endif
 
 uint8_t ads_config[5] = {6, 5, 2, 4, 0x10};      // For Exg Data. Hard-coded config with square wave
-
+bool wulpus_cfg_rcv = false;
+bool wulpus_restart_rcv = false;
 
 LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
 
@@ -164,7 +165,8 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
     if (system_status_get_board_state() == STATE_STREAMING_NORDIC) {
       ads_set_function(ADS_STILL);
-    } else {
+    } 
+    else {
       ads_set_function(ADS_INIT_GAP9_CTRL);
     }
     break;
@@ -350,23 +352,37 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_WULPUS_STREAMING:
     #if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Ping START_WULPUS_STREAMING");
-    /* Any bytes after the command code are forwarded as MSP430 config */
-    wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
-    #endif
-    
-    #if defined (CONFIG_WI_FI)
-      if (nrf_esp_comm_state != NRF_ESP_IDLE) {
-          LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
-      }
-      nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
+      LOG_INF("Ping START_WULPUS_STREAMING");
+
+      #if defined(CONFIG_WI_FI)
+        // ESP relay accumulates the whole config+start sequence and sends it
+        // as one control frame, so both packages are already back-to-back
+        // in data[] -- no need to wait for a second, separate dispatch.
+        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
+        k_msleep(500);
+        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
+        LOG_INF("WULPUS config package sent to MSP430");
+        if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+            LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+        }
+        nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
+      #else
+        // BLE streaming -- packet can be fragmented; the conf package
+        // arrives later as its own separate dispatch, via default: below.
+        wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
+      #endif
+
+      wulpus_restart_rcv = true; // Set the flag to indicate that a restart command has been received
     #endif
     break;
 
   case STOP_WULPUS_STREAMING:
     #if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Ping STOP_WULPUS_STREAMING");
-    wulpus_stop();
+      LOG_INF("Ping STOP_WULPUS_STREAMING");
+      wulpus_stop();
+      // reset the flags
+      wulpus_restart_rcv = false;
+      wulpus_cfg_rcv = false;
     #endif
     break;
 
@@ -449,12 +465,18 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
      * configuration for the WULPUS dongle (which sends raw config bytes
      * without a preceding command code, exactly as the old nRF52 firmware).
      */
-#if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Unrecognised cmd %u - treating as WULPUS MSP430 config", cmd);
-    wulpus_set_msp_config(data, size);
-#else
-    LOG_WRN("Unrecognised command: %u", cmd);
-#endif
-    break;
+
+
+    #if defined(CONFIG_SENSOR_WULPUS)
+        if ((wulpus_restart_rcv == true)) {
+          LOG_INF("Received WULPUS configuration after restart command, forwarding to wulpus_set_msp_config");
+          wulpus_set_msp_config(data, size);
+
+          
+        }
+    #else
+        LOG_WRN("Unrecognised command: %u", cmd);
+    #endif
+        break;
   }
 }
