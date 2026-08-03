@@ -378,19 +378,42 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_0;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 0].buffer, WULPUS_BYTES_PER_XFER);
-            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+            #if defined(CONFIG_WIFI)
+                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #else
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #endif
+
+            
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_1;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 1].buffer, WULPUS_BYTES_PER_XFER);
-            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+            #if defined(CONFIG_WIFI)
+                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #else
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #endif
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 2].buffer, WULPUS_BYTES_PER_XFER);
-            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+            #if defined(CONFIG_WIFI)
+                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #else
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #endif
+            
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 3].buffer, WULPUS_BYTES_PER_XFER);
-            add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+            #if defined(CONFIG_WIFI)
+                add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #else
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+            #endif
 
             buffer_content--;
             current_buffer++;
@@ -463,7 +486,7 @@ void wulpus_init(void)
         return;
     }
 
-    LOG_INF("WULPUS initialized – HOST_LINK_RDY LOW, waiting for MSP430 config via BLE");
+    LOG_INF("WULPUS initialized – HOST_LINK_RDY LOW, waiting for MSP430 config");
 
     /* Race-condition guard: if a BLE config packet arrived before wulpus_init()
      * ran (possible when the host connects quickly and sends the combined
@@ -476,6 +499,25 @@ void wulpus_init(void)
         LOG_INF("WULPUS: pre-init config detected – HOST_LINK_RDY re-asserted");
     }
 }
+
+
+// void wulpus_power_up(void){
+//     /* Rails are powered on demand at the first WULPUS use, not at boot:
+//      * the VD0 5 V boost must not run during EEG/EMG-only sessions
+//      * (switching noise; on battery it can desense the BLE radio). */
+//     static bool wulpus_rails_on = false;
+
+//     if (!wulpus_rails_on) {
+//         LOG_INF("Powering WULPUS rails (VA0/VD0/VD2)");
+//         if (wulpus_power_on() != 0) {
+//             LOG_ERR("WULPUS rail power-on failed - config not sent");
+//             return;
+//         }
+//         wulpus_rails_on = true;
+//         k_msleep(WULPUS_POWERUP_DELAY_MS);
+//     }
+//     LOG_INF("WULPUS rails powered up, ready for MSP430 config");
+// }
 
 void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
 {
@@ -496,6 +538,7 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
 
     if (config != NULL && len > 0) {
         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
+        LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d", len, config[0]);
         if (config[0] == 250 || config[0] == 251) {
             m_tx_write_pos = 0;
             wulpus_frame_counter = 0;   /* new streaming session: reset counter */
@@ -519,6 +562,25 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
     LOG_INF("WULPUS config fragment (%u bytes, tx_buf filled %u/%u) – HOST_LINK_RDY HIGH",
             (unsigned)len, (unsigned)m_tx_write_pos, (unsigned)WULPUS_BYTES_PER_XFER);
 }
+
+// void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
+// {
+//     LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d", len, config[0]);
+    
+//     if (config != NULL && len > 0) {
+//         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
+//         if (config[0] == 250 || config[0] == 251) {
+//             LOG_INF("WULPUS first byte is 0x%02X – starting new config assembly", config[0]);
+//             m_tx_write_pos = 0;
+//             wulpus_frame_counter = 0;   /* new streaming session: reset counter */
+//         }
+//         uint16_t copy_len = MIN(len, (uint16_t)(WULPUS_BYTES_PER_XFER - m_tx_write_pos));
+//         memcpy(m_tx_buf + m_tx_write_pos, config, copy_len);
+//         m_tx_write_pos += copy_len;
+//     }
+
+//     LOG_INF("%u bytes have been written to the WULPUS TX buffer (MSP430 config)", m_tx_write_pos);
+// }
 
 void wulpus_stop(void)
 {

@@ -131,7 +131,7 @@ int eeg_init(void) {
   return 0;
 }
 
-int eeg_start_streaming(void) {
+int eeg_start_streaming(uint8_t *ads_config) {
   if (!IS_ENABLED(CONFIG_SENSOR_EEG)) {
     LOG_ERR("EEG support not enabled in this build (CONFIG_SENSOR_EEG)");
     return -ENOTSUP;
@@ -200,15 +200,9 @@ int eeg_start_streaming(void) {
   }
 
   LOG_INF("Initializing ADS1298 devices with provided parameters");
-  uint8_t ads_params[5] = {
-      eeg_config.sample_rate,
-      eeg_config.ads_mode,
-      eeg_config.channel_2_func,
-      eeg_config.channel_4_func,
-      eeg_config.gain
-  };
-  ads_init(ads_params, ADS1298_A);
-  ads_init(ads_params, ADS1298_B);
+
+  ads_init(ads_config, ADS1298_A);
+  ads_init(ads_config, ADS1298_B);
 
   /* Command sequence done -- back to full speed for RDATAC streaming. */
   spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);

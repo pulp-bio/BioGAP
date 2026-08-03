@@ -47,6 +47,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define MSP_RESTART_PCK_LEN 105   
 /**
  * @brief Initialize the WULPUS sensor interface.
  *

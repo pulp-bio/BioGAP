@@ -59,17 +59,17 @@
 #include "sensors/eeg/eeg_appl.h"
 #include "sensors/emg/emg_appl.h"
 #if defined(CONFIG_SENSOR_PPG_NEW)
-#include "sensors/ppg_new/ppg_new_appl.h"
+  #include "sensors/ppg_new/ppg_new_appl.h"
 #endif
 #if defined(CONFIG_SENSOR_WULPUS)
-#include "sensors/wulpus/wulpus_appl.h"
+  #include "sensors/wulpus/wulpus_appl.h"
 #endif
 #if defined(CONFIG_WI_FI)
-#include "wifi_sd_shield/wifi_sd_shield_inits.h"
-#include "wifi_sd_shield/wifi_sd_shield_appl.h"
+  #include "wifi_sd_shield/wifi_sd_shield_inits.h"
+  #include "wifi_sd_shield/wifi_sd_shield_appl.h"
 #endif
 #if defined(CONFIG_DUMMY_SENSOR)
-#include "sensors/dummy_sensor/dummy_sensor_appl.h"
+  #include "sensors/dummy_sensor/dummy_sensor_appl.h"
 #endif
 
 // Inter-board hardware synchronization
