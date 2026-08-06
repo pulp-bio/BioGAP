@@ -273,6 +273,17 @@ static void wulpus_spi_thread(void *a, void *b, void *c)
                 WULPUS_BYTES_PER_XFER
             );
 
+            // to debug
+            uint8_t rx_data[WULPUS_BYTES_PER_XFER];
+            memcpy(rx_data, m_rx_buf[buffer_counter * WULPUS_NUMBER_OF_XFERS + i].buffer, WULPUS_BYTES_PER_XFER);
+            if(i==0){
+                uint16_t acq_nrf_msp = rx_data[2] | (rx_data[3] << 8);
+                uint8_t tx_id = rx_data[1];
+                uint8_t sox_max = rx_data[0];
+                //LOG_INF("WULPUS SPI frame %d, xfer %d, sof mask:%02X, tx_id: %d, acq_nrf_msp: %d", 
+                //    buffer_counter, i, sox_max, tx_id, acq_nrf_msp);
+            }
+
             nrfx_err_t err = nrfx_spim_xfer(&wulpus_spim, &xfer, 0);
             if (err != NRFX_SUCCESS) {
                 LOG_ERR("SPIM xfer %d failed: 0x%x", i, err);
@@ -326,7 +337,6 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
  *============================================================================*/
 #define WULPUS_BLE_STACK_SIZE  2048
 #define WULPUS_BLE_PRIORITY    5
-
 /** Standardized BLE packet size – must equal EEG_PCKT_SIZE (211). */
 #define WULPUS_BLE_PKT_SIZE  (WULPUS_BYTES_PER_XFER + 1U + 9U)
 
@@ -343,7 +353,6 @@ K_THREAD_DEFINE(wulpus_spi_tid, WULPUS_SPI_STACK_SIZE,
 #define WULPUS_META_CNT_OFF  1U
 #define WULPUS_META_TS_OFF   3U
 #define WULPUS_SPI_OFF       7U
-
 
 bool wulpus_cfg_sent = false;  // Global variable to track if the WULPUS config has been sent
 static void wulpus_ble_thread(void *a, void *b, void *c)
@@ -388,7 +397,14 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                 add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
-                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+
+                            
+                uint8_t tx_id_sent = ble_packet[8];
+                uint16_t wulpus_msp_acq_nr =((uint16_t)ble_packet[10] << 8) |(uint16_t)ble_packet[9];
+
+                //LOG_INF("Skip sending first chunk via ble, tx_id: %d, acq_nr: %d", tx_id_sent, wulpus_msp_acq_nr);
+
+                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
 
             
@@ -401,7 +417,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                     add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
-                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
@@ -412,7 +428,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                     add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
-                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
             
 
@@ -427,6 +443,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                 add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
 
+
             buffer_content--;
             current_buffer++;
             if (current_buffer == WULPUS_MAX_FRAMES) {
@@ -436,9 +453,123 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
     }
 }
 
-K_THREAD_DEFINE(wulpus_ble_tid, WULPUS_BLE_STACK_SIZE,
-                wulpus_ble_thread, NULL, NULL, NULL,
-                WULPUS_BLE_PRIORITY, 0, 0);
+
+/*==============================================================================
+ * ESP forwarding thread
+ *
+ * Collects the samples received from the MSP and builds a full US scan.
+ * 
+ *
+ *============================================================================*/
+
+ 
+/* esp_packet[WULPUS_ESP_PACKET_SIZE] (814 bytes) here plus
+ * add_data_to_esp_send_buffer()'s own esp_packet_t local (ESP_PCKT_MAX_SIZE=850,
+ * ~852 bytes) add up to ~1666 bytes in just these two frames -- same
+ * ESP_PCKT_MAX_SIZE-driven stack pressure fixed for the SPI NRF-ESP
+ * sender/receiver threads, missed here. */
+#define WULPUS_ESP_STACK_SIZE  4096
+#define WULPUS_ESP_PRIORITY    5
+
+/*packet : header + 6 meta + 4*201 payload + 3 reserved (zero) + tailer = 815 bytes total*/
+/*
+ *   [0]       header (WULPUS_FULL_HEADER)
+ *   [1:3]     frame counter (uint16 LE). Take the counter at the first SPI chunk of the frame
+ *   [3:7]     timestamp us  (uint32 LE). Take the timestamp at the first SPI chunk of the frame
+ *   [7:811]   4*201-byte SPI payload
+ *   [811:814] reserved (zero)
+ *   [814]     tailer (WULPUS_FULL_TAILER)
+ */
+#define WULPUS_ESP_PACKET_SIZE  (4 * WULPUS_BYTES_PER_XFER + 1U + 1U + 2U + 4U +3U)
+#define WULPUS_FULL_HEADER   0XCC
+#define WULPUS_FULL_TAILER   0xDD
+static void wulpus_esp_thread(void *a, void *b, void *c)
+{
+    ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+
+    LOG_INF("WULPUS ESP thread started");
+      
+    bool first_chunck = true; 
+    uint8_t esp_packet[WULPUS_ESP_PACKET_SIZE];
+    /* Zero once. The header [0], metadata [1..6] and SPI payload [7..207] are
+     * rewritten per chunk/frame below; the reserved bytes [208..210] stay zero. */
+    memset(esp_packet, 0, WULPUS_ESP_PACKET_SIZE);
+
+    while (1) {
+        
+        // Receive a chunck of US data from the MSP
+        k_sem_take(&wulpus_ble_ready_sem, K_FOREVER);
+        //LOG_INF("rcv WULPUS BLE ready, processing frames");
+        while (current_buffer != buffer_counter) {
+            int base = current_buffer * WULPUS_NUMBER_OF_XFERS;
+
+            /* Per-frame metadata at the front of every chunk (mirrored), matching
+             * the ExG/MIC/PPG layout: counter (u16 LE) + microsecond timestamp
+             * (u32 LE). These persist across the four sends because memcpy below
+             * only rewrites the SPI payload region [7:208] and the header [0].
+             * The timestamp was captured at frame acquisition (SPI thread). */
+
+            uint16_t off = WULPUS_SPI_OFF;
+            esp_packet[0] = WULPUS_FULL_HEADER;
+            // take the counter and timestamp at the first SPI chunk of the frame
+            uint32_t ts_us = m_frame_ts[current_buffer];
+            esp_packet[WULPUS_META_CNT_OFF]     = (uint8_t)(wulpus_frame_counter);
+            esp_packet[WULPUS_META_CNT_OFF + 1] = (uint8_t)(wulpus_frame_counter >> 8);
+            //LOG_INF("WULPUS frame %d, timestamp %u us", wulpus_frame_counter, ts_us);
+            esp_packet[WULPUS_META_TS_OFF]      = (uint8_t)(ts_us);
+            esp_packet[WULPUS_META_TS_OFF + 1]  = (uint8_t)(ts_us >> 8);
+            esp_packet[WULPUS_META_TS_OFF + 2]  = (uint8_t)(ts_us >> 16);
+            esp_packet[WULPUS_META_TS_OFF + 3]  = (uint8_t)(ts_us >> 24);
+            wulpus_frame_counter++;
+            // Copy the MSP payload 
+            memcpy(&esp_packet[WULPUS_SPI_OFF], m_rx_buf[base + 0].buffer, WULPUS_BYTES_PER_XFER);
+            first_chunck = false;
+            off += WULPUS_BYTES_PER_XFER;
+
+            // read the rest
+            for (int i = 1; i < WULPUS_NUMBER_OF_XFERS; i++) {
+                memcpy(&esp_packet[off], m_rx_buf[base + i].buffer, WULPUS_BYTES_PER_XFER);
+                off += WULPUS_BYTES_PER_XFER;
+            }
+            esp_packet[WULPUS_ESP_PACKET_SIZE - 1] = WULPUS_FULL_TAILER;
+
+
+            if (wulpus_cfg_sent) {
+                
+                uint8_t tx_id_sent = esp_packet[8];
+                uint16_t wulpus_msp_acq_nr =
+                ((uint16_t)esp_packet[10] << 8) |
+                (uint16_t)esp_packet[9];
+
+                LOG_INF("Sending WULPUS frame %d to ESP, header: 0x%02X, tailer: 0x%02X, acq_nr: %d, tx_id: %d",
+                wulpus_frame_counter - 1, esp_packet[0], esp_packet[WULPUS_ESP_PACKET_SIZE - 1], wulpus_msp_acq_nr, tx_id_sent);
+                // commented here to check if the prolem is somwhere else on the chain
+                add_data_to_esp_send_buffer(esp_packet, WULPUS_ESP_PACKET_SIZE);
+            }
+
+            buffer_content--;
+            current_buffer++;
+            if (current_buffer == WULPUS_MAX_FRAMES) {
+                current_buffer = 0;
+            }
+        }
+    }
+}
+
+
+/* BLE thread started if BLE is enabled*/
+#if defined CONFIG_WI_FI
+    /* Send to ESP thread started if WiFi - SD card is enabled */
+    K_THREAD_DEFINE(wulpus_esp_tid, WULPUS_ESP_STACK_SIZE,
+                    wulpus_esp_thread, NULL, NULL, NULL,
+                    WULPUS_ESP_PRIORITY, 0, 0);
+
+#else
+    K_THREAD_DEFINE(wulpus_ble_tid, WULPUS_BLE_STACK_SIZE,
+                    wulpus_ble_thread, NULL, NULL, NULL,
+                    WULPUS_BLE_PRIORITY, 0, 0);
+
+#endif
 
 /*==============================================================================
  * Public API
@@ -487,7 +618,7 @@ void wulpus_init(void)
     nrfx_spim_config_t config = NRFX_SPIM_DEFAULT_CONFIG(
         WULPUS_PIN_SCK, WULPUS_PIN_MOSI, WULPUS_PIN_MISO, WULPUS_PIN_CS);
 
-    config.frequency    = NRFX_MHZ_TO_HZ(2);
+    config.frequency    = NRFX_MHZ_TO_HZ(8);
     config.mode         = NRF_SPIM_MODE_1;        /* CPOL=0, CPHA=1 */
     config.bit_order    = NRF_SPIM_BIT_ORDER_MSB_FIRST;
     config.irq_priority = WULPUS_SPI_INT_PRIO;
