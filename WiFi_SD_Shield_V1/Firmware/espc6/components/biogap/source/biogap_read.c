@@ -136,7 +136,13 @@ static inline bool is_valid_packet(const uint8_t *data, const size_t packet_size
         /*Header and tailer for ExG data streaming*/
         return true;
     }
+
+    if (data[0] == WULPUS_FULL_HEADER && data[packet_size - 1] == WULPUS_FULL_TAILER) {
+        return true;
+    }
+    
     else{
+        // In case where we send SPI packet from WULPUS
         return validate_nrf_header(data[0]);
     }
 
@@ -395,7 +401,22 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 size_t rx_bytes = (size_t)(ret_trans->trans_len / 8);
 
                 if(rx_bytes < 4){
-                    continue; // ignore empty packets
+                    /* Ignore empty packets, but the slot must still be
+                     * re-armed -- ret_trans was already pulled out of the
+                     * driver's queue by spi_slave_get_trans_result() above,
+                     * so skipping this would permanently shrink the
+                     * pre-queued pool by one slot. */
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after empty packet");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after empty packet: %s", esp_err_to_name(ret));
+                        break;
+                    }
+                    continue;
                 }
                 uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
                 uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
@@ -437,8 +458,8 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                      * regular streaming reply's counter MSB once every
                      * 65536-count wrap. Drop this one transaction and keep
                      * the slot armed rather than killing the whole task. */
-                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X) -- dropping, re-arming slot",
-                            rx_data[0], rx_data[rx_bytes - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
+                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X rx_bytes=%u -- dropping, re-arming slot",
+                            rx_data[0], rx_data[rx_bytes - 1], (unsigned)rx_bytes);
                     if (!SPI_BUS_LOCK(portMAX_DELAY)) {
                         ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after invalid packet");
                         break;
@@ -472,15 +493,39 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 ret = add_to_ringbuffer(rx_data, rx_bytes);
                 if (ret != ESP_OK) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
-                    xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
+
+                    if (BACKPRESSURE_ON == 1) {
+                        ESP_LOGW(BIOGAP_READ_TAG, "Dropping packet due to ringbuffer full (backpressure disabled)");
+                        xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
+                    }
+
+                    else{
+                        ESP_LOGW(BIOGAP_READ_TAG, "Ringbuffer full...");
+                    }
+                    
                     // check if the stop command has not been set already to avoid setting it multiple times
                     if(xEventGroupGetBits(g_evt) & B_STOP_CMD_RCV_GUI){
                         ESP_LOGI(BIOGAP_READ_TAG, "STOP command already received, not forwarding another STOP to BIOGAP master");
                     }
                     else{
-                        ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg");
-                        rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
-                        xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
+                        if(BACKPRESSURE_ON == 1){
+                            ESP_LOGI(BIOGAP_READ_TAG, "Setting Stop CMD from ringbuffer full");
+                            rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
+                            xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
+                        }
+                    }
+                    /* Hand the slot back even though this packet was dropped --
+                     * otherwise the pre-queued pool permanently shrinks by one
+                     * slot per ringbuffer-full event. */
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after ringbuffer-full drop");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after ringbuffer-full drop: %s", esp_err_to_name(ret));
+                        break;
                     }
                     continue; // jump to next iteration so the STOP check can run immediately
                 }

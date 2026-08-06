@@ -112,7 +112,7 @@ extern SemaphoreHandle_t spi_bus_mutex;
 extern RingbufHandle_t ringbuff;
 
 // -------------------- Constants for NRF-ESP SPI transfer and packet building --------------------
-#define SPI_FROM_BIOGAP_MAX_SIZE    250   // max number of bytes in a single SPI transaction from BIOGAP (e.g. 410 if streaming from WULPUS)
+#define SPI_FROM_BIOGAP_MAX_SIZE    850   // max number of bytes in a single SPI transaction from BIOGAP (e.g. 410 if streaming from WULPUS)
 
 //--------------------- SPI Transactions & Mode Switching --------
 // Single SPI host constant used for both NRF and SD card modes (runtime switching)
@@ -143,4 +143,11 @@ extern bool send_start_command_to_biogap_master;
 // 1: enable INFO logs for debugging/profiling
 #ifndef ESP_ENABLE_INFO_LOGS
 #define ESP_ENABLE_INFO_LOGS 1
+#endif
+
+
+// Enable or disable back pressure
+// 1 --> halts if failing to add to ringbuffer, 0 --> drops packets if ringbuffer full
+#ifndef BACKPRESSURE_ON
+#define BACKPRESSURE_ON 0 
 #endif

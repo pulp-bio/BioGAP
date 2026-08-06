@@ -219,7 +219,7 @@ void tx_to_gui(void *pvParameters)
                     counter_rcv_prev = counter;
                 }
 
-                // Check if we have a WULPUS packet 
+                // Check if we have a WULPUS packet received via BLE
                 if(item[0] == WULPUS_HDR_XFER_0 || item[0] == WULPUS_HDR_XFER_1 || item[0] == WULPUS_HDR_XFER_2 || item[0] == WULPUS_HDR_XFER_3){
                     //ESP_LOGI(GUI_TAG, "Received WULPUS packet with header: 0x%02X", item[0]);
                     // Add bytes for TCP packet check

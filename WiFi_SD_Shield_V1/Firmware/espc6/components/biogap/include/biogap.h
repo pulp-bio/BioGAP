@@ -75,7 +75,7 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len);
 #define NRF_STOP_ACK_MASK 0x80         // Bit mask for STOP ACK in the NRF's response header byte
 
 /* Pre-queue configuration: keep this many transactions armed at all times */
-#define QUEUE_COUNT 10
+#define QUEUE_COUNT 15
 
 /* Persistent TX buffer shared with pre-queued SPI descriptors (allocated in reader) */
 extern uint8_t *sendbuf_persistent;
