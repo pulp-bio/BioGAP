@@ -42,8 +42,13 @@
 
 LOG_MODULE_REGISTER(wifi_sd_shield, LOG_LEVEL_INF);
 
-#define SPI_NRF_ESP_SENDER_STACK_SIZE 2048
-#define SPI_NRF_ESP_RECEIVER_STACK_SIZE 2048
+/* ESP_PCKT_MAX_SIZE-sized stack buffers (process_esp_data(),
+ * biogap_to_esp_transaction()) now take up to ~1700 bytes on their own at
+ * ESP_PCKT_MAX_SIZE=850 -- sized up from 2048 to leave real headroom for the
+ * rest of the call chain (spi_master_transceive(), handle_connectivity_command()
+ * and everything it calls for WULPUS/EEG/EMG start). */
+#define SPI_NRF_ESP_SENDER_STACK_SIZE 4096
+#define SPI_NRF_ESP_RECEIVER_STACK_SIZE 4096
 #define SPI_NRF_ESP_SENDER_PRIORITY 5           // Same priority as BLE send thread
 #define SPI_NRF_ESP_RECEIVER_PRIORITY 5           // Same priority as BLE receive thread
 
