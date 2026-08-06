@@ -283,7 +283,7 @@ int main(void) {
       LOG_INF("Board sync initialized");
       }
 
-
+  LOG_INF("Main thread started");
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
     //gpio_pin_set_dt(&ppg_sync_gpio, 1);
