@@ -134,7 +134,7 @@ int main(void) {
     LOG_ERR("PWR Start failed!");
   }
 
-  #if defined(GAP9)
+  #if defined(CONFIG_GAP9)
     LOG_INF("Powering GAP9...");
     gap9_pwr(true);
     LOG_INF("GAP9 powered up");
