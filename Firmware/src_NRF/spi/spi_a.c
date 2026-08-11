@@ -128,7 +128,7 @@ int init_spi_a_bus(void) {
               NRFX_SPIM_INST_HANDLER_GET(SPI_A_INST_IDX), 0, 0);
 #endif
 
-  if (spi_a_init_at(SPI_A_ADS_STREAMING_FREQ_HZ) != 0) {
+  if (spi_a_init_at(SPI_A_INIT_FREQ) != 0) {
     return -1;
   }
 

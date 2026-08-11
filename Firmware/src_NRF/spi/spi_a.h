@@ -65,6 +65,9 @@
 /** @brief SPI_A interrupt priority level */
 #define SPI_A_INT_PRIO 1
 
+/** @brief SCLK frequency for init_spi_a_bus()'s initial bring-up */
+#define SPI_A_INIT_FREQ NRFX_MHZ_TO_HZ(2)
+
 /**
  * @brief SCLK frequency safe for ADS1298 command decode
  *
