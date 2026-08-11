@@ -120,6 +120,11 @@ esp_err_t wifi_init_softap(void)
         ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
         return ret;
     }
+
+    ret = esp_wifi_set_max_tx_power(WIFI_TX_POWER_QUARTER_DBM);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_set_max_tx_power failed: %s", esp_err_to_name(ret));
+    }
     //gpio_set_level(RTC_SCL, 1);
     ESP_LOGI(TAG, "wifi_init_softap finished. SSID:%s password:%s channel:%d", EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS, (int)EXAMPLE_ESP_WIFI_CHANNEL);
     return ESP_OK;

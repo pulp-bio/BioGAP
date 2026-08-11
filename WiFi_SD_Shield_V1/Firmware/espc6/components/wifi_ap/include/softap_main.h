@@ -49,6 +49,10 @@
 #define EXAMPLE_ESP_WIFI_SSID      "bioserver"
 #define EXAMPLE_ESP_WIFI_PASS      "biogapwifi"
 #define EXAMPLE_ESP_WIFI_CHANNEL   1
+
+/** @brief Max TX power in 0.25 dBm units (esp_wifi_set_max_tx_power()); 10 = 2.5 dBm. */
+#define WIFI_TX_POWER_QUARTER_DBM  10
+
 // ====== Protocol / ports ======
 #define PORT_LAPTOP              4444
 #define PORT_ESP_NODE            3333
