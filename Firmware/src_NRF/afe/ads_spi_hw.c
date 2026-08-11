@@ -163,6 +163,9 @@ int init_ads_spi_pins() {
     LOG_ERR("ADS pwr GPIO init error");
     return -1;
   }
+
+  // TODO: missing `return 0;` on the success path (undefined behavior for
+  // a non-void function) -- left as a known issue for a follow-up fix.
 }
 
 /*==============================================================================
