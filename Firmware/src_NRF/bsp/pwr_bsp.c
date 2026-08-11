@@ -200,11 +200,7 @@ int wulpus_power_on(void) {
     // bursts mean less battery/VSYS ripple and less radio desense on
     // battery power. If VD0 sags during ultrasound TX bursts, step up to 0A75.
     pmic_conf->sbb_conf[0].mode = MAX77654_SBB_MODE_BUCKBOOST;
-    #if defined(CONFIG_WI_FI)
-      pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
-    #else
-      pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
-    #endif
+    pmic_conf->sbb_conf[0].peak_current = MAX77654_SBB_PEAK_CURRENT_0A33;
     pmic_conf->sbb_conf[0].active_discharge = false;
     pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[0].output_voltage_mV = 5000;
