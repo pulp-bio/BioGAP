@@ -264,10 +264,8 @@ void ads_spim_handler_done(void) {
         ble_tx_buf[buf_current_size++] = BLE_PCK_TAILER;
 
 #if defined(CONFIG_WI_FI)
-        //LOG_INF("Adding data to ESP send buffer");
         add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #else
-        //LOG_INF("Adding data to BLE send buffer");
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #endif
       }
@@ -288,7 +286,7 @@ void ads_drdy_callback_a(void) {
   ads_a_drdy_cycles = k_cycle_get_32();
   /* Increment debug counter for timing analysis */
   counter_extra = counter_extra + 1;
-  // LOG_INF("ADS DRDY interrupt");
+  // LOG_DBG("ADS A DRDY interrupt");
 }
 
 /**
@@ -347,16 +345,6 @@ void process_ads_data(void) {
         while (spi_xfer_done == false)
           ;
       }
-    }
-
-    uint32_t now = k_cycle_get_32();
-    uint32_t a_latency_us = k_cyc_to_us_floor32(now - ads_a_drdy_cycles);
-    uint32_t b_latency_us = k_cyc_to_us_floor32(now - ads_b_drdy_cycles);
-    if (a_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      //LOG_WRN("A DRDY serviced after %u us (waited for B)", a_latency_us);
-    }
-    if (b_latency_us > ADS_DRDY_LATENCY_WARN_US) {
-      //LOG_WRN("B DRDY serviced after %u us (waited for A)", b_latency_us);
     }
   }
   k_sleep(K_USEC(1));
