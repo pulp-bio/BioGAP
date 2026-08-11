@@ -668,7 +668,6 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
      * the VD0 5 V boost must not run during EEG/EMG-only sessions
      * (switching noise; on battery it can desense the BLE radio). */
     static bool wulpus_rails_on = false;
-    LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d, last byte is %d", len, config[0], config[len - 1]);
     if (!wulpus_rails_on) {
         LOG_INF("Powering WULPUS rails (VA0/VD0/VD2)");
         if (wulpus_power_on() != 0) {
@@ -681,7 +680,7 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
     LOG_INF("WULPUS powered on");
     if (config != NULL && len > 0) {
         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
-        LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d", len, config[0]);
+        LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d, last byte is %d", len, config[0], config[len - 1]);
         if (config[0] == 250 || config[0] == 251) {
             m_tx_write_pos = 0;
             wulpus_frame_counter = 0;   /* new streaming session: reset counter */
