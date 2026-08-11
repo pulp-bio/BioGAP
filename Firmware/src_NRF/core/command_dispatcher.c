@@ -40,7 +40,6 @@
 #if defined(CONFIG_WI_FI)
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
 #include "wifi_sd_shield/wifi_sd_shield_defs.h"
-#include <zephyr/logging/log.h>
 
 uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the current SPI packet from ESP
 #endif
@@ -52,7 +51,6 @@ uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the cur
 #endif
 
 uint8_t ads_config[5] = {6, 5, 2, 4, 0x10};      // For Exg Data. Hard-coded config with square wave
-bool wulpus_cfg_rcv = false;
 bool wulpus_restart_rcv = false;
 
 LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
@@ -72,7 +70,6 @@ LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
  */
 void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   uint8_t cmd = data[0];
-  
   switch (cmd) {
 
   case REQUEST_BATTERY_STATE:
@@ -166,8 +163,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
     if (system_status_get_board_state() == STATE_STREAMING_NORDIC) {
       ads_set_function(ADS_STILL);
-    } 
-    else {
+    } else {
       ads_set_function(ADS_INIT_GAP9_CTRL);
     }
     break;
@@ -228,7 +224,6 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #else
     LOG_WRN("Dummy sensor not built (CONFIG_DUMMY_SENSOR=n) - ignoring STOP_DUMMY_STREAMING");
   #endif
-
   #if defined CONFIG_WI_FI
     /* TODO: print WiFi transport stats */
   #else
@@ -239,8 +234,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EEG_STREAMING:
     LOG_INF("Ping START_EEG_STREAMING");
-     // the other bytes are the ads configuration
-    
+    // the other bytes are the ads configuration
     memcpy(ads_config, data + 1, 5);
     LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
 
@@ -252,7 +246,6 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     }
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
-  
     eeg_start_streaming(&ads_config[0]);
     break;
 
@@ -268,14 +261,11 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EMG_STREAMING:
     LOG_INF("Ping START_EMG_STREAMING");
-
     // the other bytes are the ads configuration
-
     memcpy(ads_config, data + 1, 5);
     LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
-  
-  
-    #ifndef CONFIG_WI_FI
+
+  #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset packet counters for new session */
   #else
     if (nrf_esp_comm_state != NRF_ESP_IDLE) {
@@ -385,9 +375,10 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     #if defined(CONFIG_SENSOR_WULPUS)
       LOG_INF("Ping STOP_WULPUS_STREAMING");
       wulpus_stop();
-      // reset the flags
       wulpus_restart_rcv = false;
-      wulpus_cfg_rcv = false;
+      #if defined(CONFIG_WI_FI)
+        nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
+      #endif
     #endif
     break;
 
@@ -470,18 +461,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
      * configuration for the WULPUS dongle (which sends raw config bytes
      * without a preceding command code, exactly as the old nRF52 firmware).
      */
-
-
     #if defined(CONFIG_SENSOR_WULPUS)
-        if ((wulpus_restart_rcv == true)) {
+        if (wulpus_restart_rcv == true) {
           LOG_INF("Received WULPUS configuration after restart command, forwarding to wulpus_set_msp_config");
           wulpus_set_msp_config(data, size);
-
-          
         }
     #else
         LOG_WRN("Unrecognised command: %u", cmd);
     #endif
-        break;
+    break;
   }
 }
