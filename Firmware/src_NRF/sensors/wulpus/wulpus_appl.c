@@ -404,7 +404,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
 
                 //LOG_INF("Skip sending first chunk via ble, tx_id: %d, acq_nr: %d", tx_id_sent, wulpus_msp_acq_nr);
 
-                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
 
             
@@ -417,7 +417,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                     add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
-                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_2;
@@ -428,9 +428,9 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
                     add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
-                //add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
+                add_data_to_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
             #endif
-            
+
 
             ble_packet[0] = WULPUS_BLE_HDR_XFER_3;
             memcpy(&ble_packet[WULPUS_SPI_OFF], m_rx_buf[base + 3].buffer, WULPUS_BYTES_PER_XFER);
