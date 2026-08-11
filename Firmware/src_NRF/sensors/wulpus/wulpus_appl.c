@@ -644,24 +644,6 @@ void wulpus_init(void)
 }
 
 
-// void wulpus_power_up(void){
-//     /* Rails are powered on demand at the first WULPUS use, not at boot:
-//      * the VD0 5 V boost must not run during EEG/EMG-only sessions
-//      * (switching noise; on battery it can desense the BLE radio). */
-//     static bool wulpus_rails_on = false;
-
-//     if (!wulpus_rails_on) {
-//         LOG_INF("Powering WULPUS rails (VA0/VD0/VD2)");
-//         if (wulpus_power_on() != 0) {
-//             LOG_ERR("WULPUS rail power-on failed - config not sent");
-//             return;
-//         }
-//         wulpus_rails_on = true;
-//         k_msleep(WULPUS_POWERUP_DELAY_MS);
-//     }
-//     LOG_INF("WULPUS rails powered up, ready for MSP430 config");
-// }
-
 void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
 {
     /* Rails are powered on demand at the first WULPUS use, not at boot:
@@ -704,25 +686,6 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
     LOG_INF("WULPUS config fragment (%u bytes, tx_buf filled %u/%u) – HOST_LINK_RDY HIGH",
             (unsigned)len, (unsigned)m_tx_write_pos, (unsigned)WULPUS_BYTES_PER_XFER);
 }
-
-// void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
-// {
-//     LOG_INF("WULPUS wulpus_set_msp_config recv %u bytes - first byte is %d", len, config[0]);
-    
-//     if (config != NULL && len > 0) {
-//         /* 0xFA (250) = new config, 0xFB (251) = restart — start a fresh assembly */
-//         if (config[0] == 250 || config[0] == 251) {
-//             LOG_INF("WULPUS first byte is 0x%02X – starting new config assembly", config[0]);
-//             m_tx_write_pos = 0;
-//             wulpus_frame_counter = 0;   /* new streaming session: reset counter */
-//         }
-//         uint16_t copy_len = MIN(len, (uint16_t)(WULPUS_BYTES_PER_XFER - m_tx_write_pos));
-//         memcpy(m_tx_buf + m_tx_write_pos, config, copy_len);
-//         m_tx_write_pos += copy_len;
-//     }
-
-//     LOG_INF("%u bytes have been written to the WULPUS TX buffer (MSP430 config)", m_tx_write_pos);
-// }
 
 void wulpus_stop(void)
 {

@@ -10,7 +10,7 @@
  * Authors:
  * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
  * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
- * - Giusy Spacone (gspacone@iìis.ee.ethz.ch), ETH Zurich
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
  * - Giovanni Pollo (giovanni.pollo@polito.it), Politecnico di Torino
  *
  * ----------------------------------------------------------------------

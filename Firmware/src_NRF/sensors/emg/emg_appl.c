@@ -183,13 +183,6 @@ int emg_start_streaming(uint8_t *ads_config) {
   }
 
   LOG_INF("Initializing ADS1298 devices with provided parameters");
-  // uint8_t ads_params[5] = {
-  //     emg_config.sample_rate,
-  //     emg_config.ads_mode,
-  //     emg_config.channel_2_func,
-  //     emg_config.channel_4_func,
-  //     emg_config.gain
-  // };
   ads_init(ads_config, ADS1298_A);
   ads_init(ads_config, ADS1298_B);
 

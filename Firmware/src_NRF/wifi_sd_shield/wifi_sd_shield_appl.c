@@ -61,48 +61,6 @@ K_SEM_DEFINE(handshake_complete_sem, 0, 2);
  * @brief Process ESP data when DRDY interrupt occurs 
  *
 */
-// void process_esp_data(void) {
-//   // LOG_INF("Processing ESP data...");
-//   if (esp_data_ready) {
-//     // LOG_INF("ESP DATA READY interrupt received");
-//     // Clear flag first to avoid missing next interrupt
-//     esp_data_ready = false;
-//     // Allocate buffer for incoming data. Need to allocate 4 Bytes for ESP DMA transaction
-
-//     bool ack_rcv = false;
-//     while(!ack_rcv){
-//     //if (first_esp_data_ready==true){
-//         uint8_t spi_tx_buf[4] = {0xBB, 0xBB, 0xBB, 0xBB}; // Dummy data to clock out the ESP response
-//         uint8_t spi_rx_buf[4] = {0x00, 0x00, 0x00, 0x00};
-//         (void)spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
-//         LOG_INF("SPI transaction with ESP completed, received: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-//         // reset the flag
-//         first_esp_data_ready = false;
-//         // Check if expected bytes match
-//         if (spi_rx_buf[0] == ESP_SPI_HEADER && spi_rx_buf[3] == ESP_SPI_TAILER) {
-//             LOG_INF("Received valid data from ESP: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-//             handle_connectivity_command(&spi_rx_buf[1], 1);
-//             ack_rcv = true;
-//             }
-//         else{
-//             LOG_WRN("Received invalid data from ESP, ignoring: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-//             // halt the system
-//             if (nrf_esp_comm_state == SEND_TO_ESP) {
-//                 LOG_ERR("=== SPI FAILURE in process_esp_data - NRF53 HALTED ===");
-//             }
-//             else{
-//                 LOG_ERR("NRF-ESP comm state is not SEND_TO_ESP (current state: %d), but received invalid data from ESP - NRF53 HALTED", nrf_esp_comm_state);
-//             }
-            
-//             //while (1) {k_sleep(K_FOREVER);} // before
-//         }
-//         serve_esp_requests = false; // Clear pending request flag after processing to allow sender thread to resume if it was yielding
-
-//         }
-//   }
-
-//   k_sleep(K_USEC(1));
-// }
 
 void process_esp_data(void) {
   // LOG_INF("Processing ESP data...");
@@ -114,9 +72,7 @@ void process_esp_data(void) {
 
     bool cmd_processed = false;
 
-    while(!cmd_processed){
-    //if (first_esp_data_ready==true){
-    
+    while(!cmd_processed){    
         uint8_t spi_tx_buf[ESP_PCKT_MAX_SIZE]; // Dummy data to clock out the ESP response
         uint8_t spi_rx_buf[ESP_PCKT_MAX_SIZE]; 
         for (uint16_t i = 0; i < ESP_PCKT_MAX_SIZE; i++) {
@@ -378,85 +334,6 @@ int initial_handshake_nrf_esp() {
                 LOG_ERR("SPI handshake failed (ret=%d)", ret);
                 // sleep 2 seconds before retrying
                 handshake_done = false;
-        }
-        LOG_INF("Retrying SPI handshake with ESP32...");
-        LOG_INF("Retry delay start (2s, busy wait)");
-        //k_busy_wait(5000000000); // 5 seconds in microseconds. Keeps CPU occupied 
-        k_sleep(K_MSEC(3000)); // 2 seconds sleep, allows other threads to run and reduces CPU usage during handshake retries
-        LOG_INF("Retry delay done, continuing handshake loop");
-        continue;
-
-
-    }
-    return -1; // Handshake failed after max attempts
-}
-
-
-/** @brief Perform initial handshake with ESP32 to verify that the connection is established */
-int handshake2() {
-
-
-    uint8_t max_handshake_attempts = 5;
-    uint8_t attempt = 0; 
-    bool handshake2_done = false;
-
-    static uint8_t spi_tx_buf[4] = {HANDSHAKE_MARKER, HANDSHAKE_MARKER, HANDSHAKE_MARKER, HANDSHAKE_MARKER};
-    static uint8_t spi_rx_buf[4] = {0x00, 0x00, 0x00, 0x00};
-    static const uint8_t expected_handshake_response[4] = {
-                HANDSHAKE_MARKER_RCV,
-                HANDSHAKE_MARKER_RCV,
-                HANDSHAKE_MARKER_RCV,
-                HANDSHAKE_MARKER_RCV,
-    };
-    uint8_t hs_completed = 0;
-    while (!handshake2_done){
-        
-        LOG_INF("Attempting SPI handshake num2 with ESP32 (attempt %d/%d)", attempt+1, max_handshake_attempts);
-        /* SPI master transaction for handshake */
-        memset(spi_rx_buf, 0x00, sizeof(spi_rx_buf));
-
-        int ret = spi_master_transceive(spi_tx_buf, spi_rx_buf, sizeof(spi_tx_buf));
-        attempt++;
-
-         
-            
-        if (ret == 0) {
-            LOG_INF("SPI handshake, received: 0x%02X 0x%02X 0x%02X 0x%02X", spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-            if (memcmp(spi_rx_buf, expected_handshake_response, sizeof(expected_handshake_response)) == 0) {
-                hs_completed++;
-                LOG_INF("==SPI handshake attempt %d done==",hs_completed);
-                k_sleep(K_MSEC(2000));
-                
-                
-                if (hs_completed == 3){
-                    handshake2_done = true;
-    
-                    LOG_INF("Initial handshake with ESP32 successful, semaphore given ");
-                    return 0;
-                }
-                //return 0; 
-            }
-            
-            else if (((spi_rx_buf[0] | spi_rx_buf[1] | spi_rx_buf[2] | spi_rx_buf[3]) == 0x00) ||
-                        ((spi_rx_buf[0] & spi_rx_buf[1] & spi_rx_buf[2] & spi_rx_buf[3]) == 0xFF)) {
-                LOG_WRN("SPI handshake rejected: RX is all 0x00/0xFF, likely slave absent, not ready, or MISO floating.");
-
-                // wait 2 seconds before retrying handshake, to avoid spamming logs and give slave time to boot
-                handshake2_done = false;
-
-            } 
-            else {
-                LOG_WRN("SPI handshake rejected: unexpected response [0x%02X 0x%02X 0x%02X 0x%02X]",
-                        spi_rx_buf[0], spi_rx_buf[1], spi_rx_buf[2], spi_rx_buf[3]);
-                
-                handshake2_done = false;
-            }
-
-        } 
-        else {
-                LOG_ERR("SPI handshake failed (ret=%d)", ret);
-                // sleep 2 seconds before retrying
-                handshake2_done = false;
         }
         LOG_INF("Retrying SPI handshake with ESP32...");
         LOG_INF("Retry delay start (2s, busy wait)");
