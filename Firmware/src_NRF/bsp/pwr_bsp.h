@@ -72,6 +72,20 @@ int pwr_charge_enable();
  */
 int wulpus_power_on(void);
 
+/**
+ * @brief Power on the mmWave shield's supply rail.
+ *
+ * Brings VD2 up to 3.3 V, the shield's digital supply. Must be called before
+ * asserting the radar's own enable pin, otherwise the BGT60TR13C is
+ * underpowered and its first register read returns an unrecognised chip ID.
+ *
+ * The rail is shared with the other shields and is therefore never torn down
+ * again; there is no matching power-off.
+ *
+ * @return 0 on success, -EIO if the PMIC write failed.
+ */
+int mmwave_shield_power_on(void);
+
 
 extern bool flag_isr_soft_reset;
 

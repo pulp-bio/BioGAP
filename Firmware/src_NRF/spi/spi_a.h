@@ -65,6 +65,29 @@
 /** @brief SPI_A interrupt priority level */
 #define SPI_A_INT_PRIO 1
 
+/*
+ * Idle configuration of the bus, i.e. what init_spi_a_bus() sets and what
+ * spi_a_restore_default_config() returns to.
+ *
+ * CONFIG_MMWAVE_SPI_STATIC_MODE is a bring-up diagnostic: it brings the bus up
+ * in the radar's dialect (mode 0) and makes the radar skip its per-transaction
+ * reconfigure, so the mode switching itself can be ruled in or out as the cause
+ * of a non-responsive radar. It breaks the ADS1298, which needs mode 1.
+ */
+#if defined(CONFIG_MMWAVE_SPI_STATIC_MODE)
+#define SPI_A_DEFAULT_MODE NRF_SPIM_MODE_0
+#define SPI_A_DEFAULT_FREQ NRF_SPIM_FREQ_8M
+#define SPI_A_DEFAULT_FREQ_HZ NRFX_MHZ_TO_HZ(CONFIG_MMWAVE_SPI_FREQ_MHZ)
+#else
+/** @brief SPI mode the bus is left in when no owner has reconfigured it
+ *  (Mode 1 = CPOL 0 / CPHA 1, required by the ADS1298) */
+#define SPI_A_DEFAULT_MODE NRF_SPIM_MODE_1
+
+/** @brief SPI clock the bus is left in when no owner has reconfigured it */
+#define SPI_A_DEFAULT_FREQ NRF_SPIM_FREQ_4M
+#define SPI_A_DEFAULT_FREQ_HZ NRFX_MHZ_TO_HZ(4)
+#endif
+
 /** @brief nrfx SPIM driver instance shared by every device on SPI_A */
 extern nrfx_spim_t spi_a_inst;
 
@@ -96,6 +119,7 @@ typedef enum {
   SPI_A_OWNER_NONE,
   SPI_A_OWNER_ADS,
   SPI_A_OWNER_WIFI_SD,
+  SPI_A_OWNER_MMWAVE,
 } spi_a_owner_t;
 
 /**
@@ -124,5 +148,46 @@ int init_spi_a_bus(void);
  * @param cs    CS GPIO to assert now and auto-deassert on completion, or NULL
  */
 void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs);
+
+/**
+ * @brief Switch the bus mode and clock for the current owner
+ *
+ * Devices on SPI_A do not all speak the same SPI dialect: the ADS1298 needs
+ * Mode 1 at 4 MHz, the BGT60TR13C radar needs Mode 0 and runs faster. Only
+ * the CONFIG and FREQUENCY registers are rewritten, so pin assignment, DMA
+ * and interrupt setup from init_spi_a_bus() stay intact.
+ *
+ * Must be called with spi_a_mutex held and no transfer in flight. An owner
+ * that changes the configuration is responsible for calling
+ * spi_a_restore_default_config() before releasing the mutex, so that owners
+ * which never touch the configuration (the ADS1298 driver) keep seeing the
+ * bus exactly as init_spi_a_bus() left it.
+ *
+ * @param mode      SPI mode to switch to
+ * @param frequency SPI clock to switch to
+ */
+void spi_a_reconfigure(nrf_spim_mode_t mode, nrf_spim_frequency_t frequency);
+
+/**
+ * @brief Report whether a transfer is still in flight on the bus
+ *
+ * True between spi_a_begin_transfer() and the completion event. Because the
+ * ADS1298 driver releases spi_a_mutex as soon as it has kicked off its async
+ * transfer (see the note on spi_a_mutex), holding the mutex is not by itself
+ * proof that the bus is idle. A consumer that rewrites the peripheral's
+ * configuration -- rather than only pushing data -- must wait for this to go
+ * false first, or it would corrupt the transfer still running.
+ *
+ * @return true if a transfer is in progress, false if the bus is idle
+ */
+bool spi_a_transfer_in_flight(void);
+
+/**
+ * @brief Restore the bus to SPI_A_DEFAULT_MODE / SPI_A_DEFAULT_FREQ
+ *
+ * Counterpart to spi_a_reconfigure(); see its documentation. Must be called
+ * with spi_a_mutex held and no transfer in flight.
+ */
+void spi_a_restore_default_config(void);
 
 #endif // SPI_A_H

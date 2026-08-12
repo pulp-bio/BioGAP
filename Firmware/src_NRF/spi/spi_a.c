@@ -36,8 +36,10 @@ LOG_MODULE_REGISTER(spi_a, LOG_LEVEL_INF);
 nrfx_spim_t spi_a_inst = NRFX_SPIM_INSTANCE(SPI_A_INST_IDX);
 K_MUTEX_DEFINE(spi_a_mutex);
 
-/** @brief Owner of the in-flight transfer, set by spi_a_begin_transfer() */
-static spi_a_owner_t current_owner = SPI_A_OWNER_NONE;
+/** @brief Owner of the in-flight transfer, set by spi_a_begin_transfer().
+ *  Volatile because it is cleared from the completion ISR and polled from
+ *  thread context by spi_a_transfer_in_flight(). */
+static volatile spi_a_owner_t current_owner = SPI_A_OWNER_NONE;
 
 /** @brief CS line to auto-deassert on completion, or NULL if the owner
  *  manages its own CS deassertion */
@@ -48,12 +50,20 @@ static const struct gpio_dt_spec *current_cs = NULL;
  *  init order, without re-initializing an already-live peripheral. */
 static bool spi_a_initialized = false;
 
+/* The completion dispatcher exists only when this module owns the peripheral.
+ * With CONFIG_MMWAVE_ZEPHYR_SPI the Zephyr SPI driver owns SPIM4 and installs
+ * its own handler, so ours would be dead code. */
+#if !defined(CONFIG_MMWAVE_ZEPHYR_SPI)
+
 /* Each consumer owns its own completion handling (CS deassertion for
  * multi-CS owners, data processing, semaphore signalling, ...); this
  * module only routes the single nrfx completion event to the right one. */
 extern void ads_spim_transfer_complete(void);
 #if defined(CONFIG_WI_FI)
 extern void wifi_sd_spim_transfer_complete(void);
+#endif
+#if defined(CONFIG_SENSOR_MMWAVE)
+extern void mmwave_spim_transfer_complete(void);
 #endif
 
 static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context) {
@@ -78,12 +88,39 @@ static void spi_a_event_handler(nrfx_spim_evt_t const *p_event, void *p_context)
       LOG_WRN("SPI_A transfer completed for WiFi/SD owner, but CONFIG_WI_FI=n");
 #endif
       break;
+    case SPI_A_OWNER_MMWAVE:
+#if defined(CONFIG_SENSOR_MMWAVE)
+      mmwave_spim_transfer_complete();
+#else
+      LOG_WRN("SPI_A transfer completed for mmWave owner, but CONFIG_SENSOR_MMWAVE=n");
+#endif
+      break;
     default:
       LOG_WRN("SPI_A transfer completed with no registered owner");
       break;
   }
   current_owner = SPI_A_OWNER_NONE;
 }
+
+#endif /* !CONFIG_MMWAVE_ZEPHYR_SPI */
+
+#if defined(CONFIG_MMWAVE_ZEPHYR_SPI)
+
+int init_spi_a_bus(void) {
+  /* Zephyr's SPI driver owns SPIM4 in this build (see CONFIG_MMWAVE_ZEPHYR_SPI):
+   * it runs its own nrfx_spim_init() with its own event handler, so claiming the
+   * instance here as well would fight it. Report success so callers proceed --
+   * the consequence is that ADS1298 transfers do not work in a radar-only
+   * image, which is the documented trade-off of that option. */
+  if (!spi_a_initialized) {
+    spi_a_initialized = true;
+    LOG_INF("SPI_A left to the Zephyr SPI driver (radar-only build); "
+            "ADS1298 transfers are not available");
+  }
+  return 0;
+}
+
+#else /* raw nrfx ownership of SPI_A */
 
 int init_spi_a_bus(void) {
   nrfx_err_t status;
@@ -99,8 +136,8 @@ int init_spi_a_bus(void) {
 
   nrfx_spim_config_t config =
       NRFX_SPIM_DEFAULT_CONFIG(SPI_A_SCK_PIN, SPI_A_MOSI_PIN, SPI_A_MISO_PIN, NRF_SPIM_PIN_NOT_CONNECTED);
-  config.frequency = NRFX_MHZ_TO_HZ(4);
-  config.mode = NRF_SPIM_MODE_1;
+  config.frequency = SPI_A_DEFAULT_FREQ_HZ;
+  config.mode = SPI_A_DEFAULT_MODE;
   config.bit_order = NRF_SPIM_BIT_ORDER_MSB_FIRST;
   config.irq_priority = SPI_A_INT_PRIO;
 
@@ -116,10 +153,28 @@ int init_spi_a_bus(void) {
   return 0;
 }
 
+#endif /* CONFIG_MMWAVE_ZEPHYR_SPI */
+
 void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs) {
   current_owner = owner;
   current_cs = cs;
   if (cs != NULL) {
     gpio_pin_set_dt(cs, 1); // assert
   }
+}
+
+bool spi_a_transfer_in_flight(void) { return current_owner != SPI_A_OWNER_NONE; }
+
+void spi_a_reconfigure(nrf_spim_mode_t mode, nrf_spim_frequency_t frequency) {
+  nrf_spim_configure(spi_a_inst.p_reg, mode, NRF_SPIM_BIT_ORDER_MSB_FIRST);
+  nrf_spim_frequency_set(spi_a_inst.p_reg, frequency);
+  /* Same barrier nrfy_spim_periph_configure() ends with: make sure the CONFIG
+   * and FREQUENCY writes have left the write buffer before the caller starts a
+   * transfer, otherwise the first bytes could still be clocked with the
+   * previous owner's mode. */
+  nrf_barrier_w();
+}
+
+void spi_a_restore_default_config(void) {
+  spi_a_reconfigure(SPI_A_DEFAULT_MODE, SPI_A_DEFAULT_FREQ);
 }

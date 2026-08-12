@@ -35,6 +35,7 @@ response packets the device sends back.
    - [3.3 Microphone (PDM audio)](#33-microphone-pdm-audio)
    - [3.4 WULPUS PRO (ultrasound)](#34-wulpus-pro-ultrasound)
    - [3.5 PPG (MAXM86161)](#35-ppg-maxm86161)
+   - [3.6 mmWave radar (BGT60TR13C)](#36-mmwave-radar-bgt60tr13c)
 4. [Command packets (host → device)](#4-command-packets-host--device)
 5. [Response / status packets (device → host)](#5-response--status-packets-device--host)
 6. [Scaling and units](#6-scaling-and-units)
@@ -73,10 +74,11 @@ so a single stream can carry a mix (e.g. ExG + WULPUS) and be demuxed by header.
 | `0x56` | `0x57` | 236 | IMU (accelerometer + gyroscope) data | device → host |
 | `0xAA` | `0x55` | 136 | Microphone (PDM) data | device → host |
 | `0x10`–`0x13` | (metadata tail) | 211 | WULPUS PRO ultrasound chunk (4 = 1 frame) | device → host |
+| `0x60` | `0x61` | 244 | mmWave radar frame chunk (N = 1 frame) | device → host |
 | `0x70` | `0x71` | 211 | PPG data | device → host |
 | `0xFA` (250) | — | 105 | WULPUS MSP430 config | host → device |
 | `0xFB` (251) | — | 105 | WULPUS restart | host → device |
-| 12–43 | — | 1–12 | Command code | host → device |
+| 12–51 | — | 1–12 | Command code | host → device |
 | 14/17/28/29 | `0xAA` | 4 / 7 | Status / version response | device → host |
 | `0x2B` (43) | `0xAA` | 21 | Extended system-status response | device → host |
 
@@ -371,6 +373,75 @@ padding. Inactive sensors/LEDs produce **no bytes** (not zeros interleaved).
 
 ---
 
+## 3.6 mmWave radar (BGT60TR13C)
+
+Raw ADC frames from the Infineon XENSIV BGT60TR13C 60 GHz FMCW radar on the
+SENSEI mmWave shield. **One frame spans several packets:** a frame is larger
+than a BLE notification, so it is chunked and reassembled by the host — the same
+pattern as WULPUS, but with the chunk index carried explicitly instead of
+encoded in the header byte.
+
+- **Header:** `0x60` (`MMWAVE_DATA_HEADER`) · **Trailer:** `0x61` (`MMWAVE_DATA_TRAILER`, at byte 243)
+- **Total length:** 244 bytes (`BLE_PCKT_MAX_SIZE`)
+- **Payload per packet:** 236 bytes
+- **Firmware:** `sensors/mmWave/mmWave_appl.c`, `sensors/mmWave/mmWave_appl.h`
+- **GUI parser:** `biogui/platforms/biogapultra/biogapultra_mmwave/interface_biogapultra_mmwave.py`
+
+### Overall layout
+
+| Byte | Field name | Data type |
+|---|---|---|
+| 0 | Header (`0x60`) | uint8 |
+| 1-4 | Frame timestamp (µs); **bit 0 = external sync level** | uint32 **BE** |
+| 5 | Chunk index, 0-based | uint8 |
+| 6 | Total chunks in this frame | uint8 |
+| 7-242 | Payload — 12-bit packed ADC samples, zero padded in the last chunk | see below |
+| 243 | Trailer (`0x61`) | uint8 |
+
+> ⚠️ The timestamp is **big endian**, unlike every other BioGAP packet (which
+> uses little endian). It is also not a pure timestamp: bit 0 carries the
+> external sync output's level (`CONFIG_MMWAVE_EXT_SYNC`, always 0 when
+> disabled), so a decoder must mask it off — `ts = raw & ~1`, `sync = raw & 1`.
+
+### Reassembly
+
+Every chunk of one frame repeats the same timestamp, which is what makes loss
+detectable. A decoder should start a frame on `chunk == 0`, then require that
+each subsequent chunk has the expected index **and** a matching timestamp, and
+discard the partial frame otherwise. The frame is complete when
+`chunk + 1 == total_chunks`.
+
+### Sample packing
+
+Samples are 12-bit and are forwarded exactly as they leave the radar's FIFO —
+two samples per three bytes (`CONFIG_MMWAVE_SEND_PACKED_12BIT=y`, the default):
+
+```
+byte0 = s0[11:4]
+byte1 = (s0[3:0] << 4) | s1[11:8]
+byte2 = s1[7:0]
+```
+
+With `CONFIG_MMWAVE_SEND_PACKED_12BIT=n` each sample is instead zero-extended to
+a uint16 LE, which costs 33 % more bandwidth.
+
+### Frame geometry
+
+Fixed by the compiled-in register profile (`CONFIG_MMWAVE_CONF_*`), and the host
+must be configured to match — it is not carried in the packet:
+
+| Profile | Frames/s | Geometry | Samples | Packed bytes | Packets/frame |
+|---|---|---|---|---|---|
+| `100FPS_32C_8S` (default) | 100 | 32 chirps × 8 samples × 1 RX | 256 | 384 | 2 |
+| `{25,50,100,150,200}FPS` | 25–200 | 32 chirps × 8 samples × 1 RX | 256 | 384 | 2 |
+| `STATIC_DISTANCE` | 5 | 32 chirps × 64 samples × 1 RX | 2048 | 3072 | 13 |
+
+Samples arrive chirp-major: chirp 0's samples first, then chirp 1's, and so on,
+with the RX antenna as the innermost dimension. A host therefore reshapes a
+frame to `(num_chirps, num_samples, num_rx)`.
+
+---
+
 ## 4. Command packets (host → device)
 
 Every command is a single command-code byte written to the NUS RX
@@ -410,7 +481,40 @@ characteristic, optionally followed by a config payload. Defined in
 | 41 | `START_WULPUS_STREAMING` | WULPUS MSP430 config bytes (see [3.4](#34-wulpus-pro-ultrasound)) | forward config to MSP430 |
 | 42 | `STOP_WULPUS_STREAMING` | — | stop WULPUS |
 | 43 | `REQUEST_SYSTEM_STATUS` | — | → extended system-status response |
+| 44 | `START_MMWAVE_STREAMING` | — | start radar frame stream |
+| 45 | `STOP_MMWAVE_STREAMING` | — | stop radar stream |
+| 46 | `CONFIGURE_MMWAVE` | — | write the radar register profile |
+| 47 | `TURN_OFF_MMWAVE` | — | cut the radar power rail, free the battery ADC pin |
+| 48 | `TURN_ON_MMWAVE` | — | power the radar and probe it |
+| 49 | `CHANGE_IFGAIN_MMWAVE` | `[1]`: IF gain in dB | set radar IF gain |
+| 50 | `CHANGE_TXPOWER_MMWAVE` | `[1]`: 0–31 | set radar TX power |
+| 51 | `CHANGE_FPS_MMWAVE` | `[1]`: 25 / 50 / 100 / 150 / 200 | set radar frame rate |
 | *any other* | (unrecognised) | full payload | treated as raw WULPUS MSP430 config |
+
+### mmWave command sequence (44–51)
+
+The radar must be powered and configured before it can stream, so a single
+start opcode is not enough:
+
+```
+Peer → Device:  [48]                  (TURN_ON_MMWAVE)
+Peer → Device:  [49][33]              (CHANGE_IFGAIN_MMWAVE, 33 dB)   optional
+Peer → Device:  [50][31]              (CHANGE_TXPOWER_MMWAVE, 31)     optional
+Peer → Device:  [51][100]             (CHANGE_FPS_MMWAVE, 100 fps)    optional
+Peer → Device:  [46]                  (CONFIGURE_MMWAVE)
+Peer → Device:  [44]                  (START_MMWAVE_STREAMING)
+Device → Peer:  [0x60][ts][chunk][total][data...][0x61]   (radar chunks)
+...
+Peer → Device:  [45]                  (STOP_MMWAVE_STREAMING)
+Peer → Device:  [47]                  (TURN_OFF_MMWAVE)
+```
+
+Valid IF gains are 18, 23, 28, 30, 33, 35, 38, 40, 43, 45, 48, 50, 55, 60 dB.
+The three `CHANGE_*` commands are applied immediately when the device is already
+configured, and otherwise stored and applied at the next `CONFIGURE_MMWAVE`; a
+`CHANGE_*` sent without its value byte is ignored. Powering off invalidates the
+configuration, so `CONFIGURE_MMWAVE` must be repeated after every
+`TURN_ON_MMWAVE`.
 
 ### `START_PPG_STREAMING` (39) config payload
 

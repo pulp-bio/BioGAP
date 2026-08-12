@@ -49,6 +49,9 @@ uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the cur
 #if defined(CONFIG_SENSOR_WULPUS)
 #include "sensors/wulpus/wulpus_appl.h"
 #endif
+#if defined(CONFIG_SENSOR_MMWAVE)
+#include "sensors/mmWave/mmWave_appl.h"
+#endif
 
 LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
 
@@ -412,6 +415,72 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     LOG_DBG("Ping STOP_IMU_STREAMING");
     imu_stop_streaming();
     break;
+
+  /* The case labels themselves are conditional, not just their bodies: without
+   * the radar, opcodes 44-51 must keep falling through to default:, which
+   * forwards unrecognised payloads to the WULPUS MSP430 (a config blob may
+   * legitimately start with one of these bytes). */
+#if defined(CONFIG_SENSOR_MMWAVE)
+  case TURN_ON_MMWAVE:
+    LOG_INF("Ping TURN_ON_MMWAVE");
+    mmWave_power_on();
+    break;
+
+  case TURN_OFF_MMWAVE:
+    LOG_INF("Ping TURN_OFF_MMWAVE");
+    mmWave_power_off();
+    break;
+
+  case CONFIGURE_MMWAVE:
+    LOG_INF("Ping CONFIGURE_MMWAVE");
+    mmWave_configure();
+    break;
+
+  case START_MMWAVE_STREAMING:
+    LOG_INF("Ping START_MMWAVE_STREAMING");
+    #ifndef CONFIG_WI_FI
+    ble_reset_packet_counters(); /* Reset packet counters for new session */
+    #endif
+    mmWave_start_streaming();
+    break;
+
+  case STOP_MMWAVE_STREAMING:
+    LOG_INF("Ping STOP_MMWAVE_STREAMING");
+    mmWave_stop_streaming();
+    #ifndef CONFIG_WI_FI
+    ble_print_packet_stats(); /* Print BLE packet stats */
+    #endif
+    break;
+
+  /* The three setters below take their value from data[1]; a caller that can
+   * only supply the opcode leaves the current setting in place. */
+  case CHANGE_IFGAIN_MMWAVE:
+    LOG_INF("Ping CHANGE_IFGAIN_MMWAVE");
+    if (size > 1) {
+      mmWave_set_ifGain(data[1]);
+    } else {
+      LOG_WRN("CHANGE_IFGAIN_MMWAVE without a value byte - ignored");
+    }
+    break;
+
+  case CHANGE_TXPOWER_MMWAVE:
+    LOG_INF("Ping CHANGE_TXPOWER_MMWAVE");
+    if (size > 1) {
+      mmWave_set_txPower(data[1]);
+    } else {
+      LOG_WRN("CHANGE_TXPOWER_MMWAVE without a value byte - ignored");
+    }
+    break;
+
+  case CHANGE_FPS_MMWAVE:
+    LOG_INF("Ping CHANGE_FPS_MMWAVE");
+    if (size > 1) {
+      mmWave_set_fps(data[1]);
+    } else {
+      LOG_WRN("CHANGE_FPS_MMWAVE without a value byte - ignored");
+    }
+    break;
+#endif /* CONFIG_SENSOR_MMWAVE */
 
   default:
     /*

@@ -231,3 +231,104 @@ typedef struct Record {
     uint16_t tail;
 } sense_struct;
 ```
+---
+
+## mmWave Radar Module (`sensors/mmWave/`)
+
+Contactless pulse-wave sensing with an Infineon XENSIV BGT60TR13C 60 GHz FMCW
+radar on the SENSEI mmWave shield. Built only when `CONFIG_SENSOR_MMWAVE=y`
+(see [Configuration](./configuration.md#mmwave-radar)).
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `mmWave_appl.c` | State machine, streaming thread, chunked BLE packetisation |
+| `mmWave_appl.h` | Device states, packet header/trailer, public control API |
+| `mmWave_spi.c` | SPI transport A: platform callbacks over the shared nrfx SPI_A bus |
+| `mmWave_spi_zephyr.c` | SPI transport B: platform callbacks over the Zephyr SPI subsystem |
+| `mmWave_spi.h` | Transport API and the opaque interface handle |
+| `mmWave_config.h` | Selects the register profile and derives the frame geometry |
+| `driver/xensiv_bgt60trxx.c/h` | Infineon vendor driver (unmodified) |
+| `driver/xensiv_bgt60trxx_regs.h` | Register definitions (vendor) |
+| `driver/xensiv_bgt60trxx_platform.h` | Platform callback contract (vendor) |
+| `driver/*fps.h`, `driver/static_distance.h` | Generated register profiles |
+
+### Configuration
+
+Default profile (`CONFIG_MMWAVE_CONF_100FPS_32C_8S`):
+
+| Parameter | Value |
+|-----------|-------|
+| Sensor | BGT60TR13C (Infineon) |
+| Interface | SPI_A (SPIM4), mode 0, 8 MHz, software CS on P1.11 |
+| Chirp band | 58.0 - 63.5 GHz (5.5 GHz sweep, ~27 mm range resolution) |
+| Frame rate | 100 fps |
+| Frame geometry | 32 chirps x 8 samples x 1 RX antenna = 256 samples |
+| ADC resolution | 12 bit, streamed packed (384 bytes/frame) |
+| BLE load | 2 packets/frame, 200 packets/s |
+| Control GPIOs | IRQ = P0.12, RST = P0.04, PWR = P0.07 |
+
+### Bus Sharing
+
+There are two interchangeable transports behind the same `mmWave_spi.h` API, so
+`mmWave_appl.c` is identical for both. Which one is built is decided by
+`CONFIG_MMWAVE_ZEPHYR_SPI`; see
+[Configuration](./configuration.md#choosing-a-transport).
+
+**Shared (`mmWave_spi.c`, default).** SPI_A is shared with the ADS1298 AFEs and
+the WiFi/SD shield, and the radar is the only device on it needing a different
+SPI dialect. The driver's chip-select callback therefore doubles as the bus lock:
+it takes `spi_a_mutex` and switches the peripheral to mode 0 when CS is asserted,
+then restores mode 1 / 4 MHz and releases the mutex when CS is deasserted. The
+vendor driver brackets every register access and FIFO burst in exactly one such
+CS pair, so the radar never leaves the bus misconfigured for the ADS1298.
+
+Holding the mutex is not sufficient on its own: the ADS1298 driver releases it as
+soon as it has queued an asynchronous transfer, so one may still be running. Since
+rewriting the peripheral's mode would corrupt it, the callback also waits for
+`spi_a_transfer_in_flight()` to clear before touching the configuration.
+
+**Exclusive (`mmWave_spi_zephyr.c`).** Zephyr's SPI driver owns SPIM4, the radar
+is the only device on the bus, and the configuration comes once from the
+devicetree. This reproduces the standalone BGT60TR13C firmware validated on this
+hardware. `init_spi_a_bus()` becomes a no-op, so ExG does not function in such a
+build.
+
+### State Machine
+
+```
+NO_HW --mmWave_HW_init()--> HW_ACTIVE --mmWave_power_on()--> IDLE
+IDLE --mmWave_configure()--> CONFIGURED
+CONFIGURED --mmWave_start_streaming()--> STREAMING
+STREAMING --mmWave_stop_streaming()--> STOPPING --> CONFIGURED
+CONFIGURED --mmWave_power_off()--> HW_ACTIVE
+```
+
+A power cycle invalidates the register configuration, so `mmWave_configure()`
+must be called again after every `mmWave_power_on()`. That is why the host start
+sequence is `TURN_ON` -> (optional `CHANGE_*`) -> `CONFIGURE` -> `START`.
+
+### Acquisition Flow
+
+1. `mmWave_HW_init()` configures the control GPIOs, brings up SPI_A and reads
+   the IF gain, TX power and frame-rate defaults out of the compiled-in
+   register list, so the runtime setters start from the right base values.
+2. `TURN_ON_MMWAVE` releases SAADC channel 0, drives the power rail, pulses
+   RST, and probes the device.
+3. `CONFIGURE_MMWAVE` writes the register profile, applies the current gain /
+   TX power / frame rate, sets the FIFO limit to one frame and arms the
+   IRQ on the rising edge.
+4. `START_MMWAVE_STREAMING` releases the streaming thread, which resets the
+   FIFO and starts frame generation.
+5. On each IRQ the thread reads one frame from the FIFO and hands it to
+   `mmwave_send_payload()`, which splits it into chunks tagged with a shared
+   frame timestamp so the host can detect a dropped chunk.
+
+### External Sync (optional)
+
+With `CONFIG_MMWAVE_EXT_SYNC=y` a GPIO toggles at a fixed period while the
+radar streams, for time-aligning recordings against a reference device
+(Finapres / NovaScope). Its current level is mirrored into bit 0 of every packet
+timestamp, so the alignment is recoverable from the data stream alone. When the
+option is off the bit is always 0 and the packet layout is unchanged.

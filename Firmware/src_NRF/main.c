@@ -61,6 +61,9 @@
 #if defined(CONFIG_SENSOR_WULPUS)
 #include "sensors/wulpus/wulpus_appl.h"
 #endif
+#if defined(CONFIG_SENSOR_MMWAVE)
+#include "sensors/mmWave/mmWave_appl.h"
+#endif
 #if defined(CONFIG_WI_FI)
 #include "wifi_sd_shield/wifi_sd_shield_inits.h"
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
@@ -99,7 +102,40 @@ void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
  * the ADS streams, the power thread therefore runs read-free quiet cycles:
  * battery voltage/SoC/currents stay live, status flags and charger
  * operations are frozen until the stream stops. */
-static bool pmic_measurements_allowed(void) { return ads_get_function() != ADS_READ; }
+/* The mmWave shield's power-enable pin is also the battery-monitor ADC input
+ * (P0.07 / SAADC AIN3), so while the radar is powered a measurement would
+ * sample its enable level instead of the battery. Gating the measurement is
+ * what makes the pin sharing safe: Zephyr's SAADC driver re-applies the channel
+ * input on every read, so simply disconnecting the input once would not hold. */
+static bool pmic_measurements_allowed(void) {
+  if (ads_get_function() == ADS_READ) {
+    return false;
+  }
+#if defined(CONFIG_SENSOR_MMWAVE)
+  if (mmWave_is_powered()) {
+    return false;
+  }
+#endif
+  return true;
+}
+
+/* The measurement gate above only suppresses the power thread's *full* cycles;
+ * while it vetoes, the thread still runs reduced "quiet" cycles that keep
+ * measuring, on the reasoning that AMUX/SAADC measurements are electrically
+ * clean. That reasoning does not hold when the ADC pin is not the ADC's to use:
+ * a quiet cycle 120 s into a radar session re-applied the channel input, which
+ * switched P0.07 to analog mode, dropped the GPIO drive holding the shield on,
+ * and powered the radar off mid-stream.
+ *
+ * Deliberately independent of the ADS check: ExG streaming has no claim on this
+ * pin, so quiet-cycle telemetry stays live through ExG sessions. */
+static bool battery_adc_available(void) {
+#if defined(CONFIG_SENSOR_MMWAVE)
+  return !mmWave_is_powered();
+#else
+  return true;
+#endif
+}
 
 int main(void) {
   int ret = 0;
@@ -112,6 +148,22 @@ int main(void) {
   if (pwr_init()) {
     LOG_ERR("PWR Init failed!");
   }
+
+#if defined(CONFIG_MMWAVE_ZEPHYR_SPI)
+  /* Radar-only image: configure the full PMIC rail set at boot, as the
+   * standalone BGT60TR13C firmware does. BioGAP normally never calls this --
+   * it leaves VD0/VD1/VD2/VA0 at whatever the PMIC powers up with and only
+   * brings up what a given shield needs -- but the radar was validated against
+   * this complete configuration (VD0 3.3 V, VD1 2.8 V, VD2 3.3 V, VA0 3.3 V,
+   * 1 A peak), and VD2 in particular is its digital supply.
+   *
+   * Deliberately not done in the shared-bus build, where it would change the
+   * rails the ExG path runs on. */
+  LOG_INF("Configuring PMIC rails for the radar...");
+  if (pwr_bsp_start()) {
+    LOG_ERR("PWR BSP Start failed!");
+  }
+#endif
 
   if (!device_is_ready(uart_dev)) {
     LOG_ERR("CDC ACM device not ready");
@@ -136,6 +188,7 @@ int main(void) {
    * after pwr_charge_enable() so the periodic charger re-config re-applies
    * the final charger settings. */
   pwr_set_measurement_gate(pmic_measurements_allowed);
+  pwr_set_adc_gate(battery_adc_available);
   if (pwr_start()) {
     LOG_ERR("PWR Start failed!");
   }
@@ -232,16 +285,7 @@ int main(void) {
   }
 #endif
 
-#if defined(CONFIG_SENSOR_WULPUS)
-  // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
-  // Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
-  // incl. the 5 V boost) are powered on demand when the first WULPUS config
-  // arrives via BLE (see wulpus_set_msp_config), so they stay off during
-  // EEG/EMG-only sessions.
-  LOG_INF("Initializing WULPUS...");
-  wulpus_init();
-  LOG_INF("WULPUS initialized");
-#endif
+
 
   // Initialize inter-board synchronization
   LOG_INF("Initializing board sync...");
@@ -253,6 +297,31 @@ int main(void) {
 
 
   */
+
+#if defined(CONFIG_SENSOR_WULPUS)
+// Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
+// Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
+// incl. the 5 V boost) are powered on demand when the first WULPUS config
+// arrives via BLE (see wulpus_set_msp_config), so they stay off during
+// EEG/EMG-only sessions.
+LOG_INF("Initializing WULPUS...");
+wulpus_init();
+LOG_INF("WULPUS initialized");
+#endif
+
+#if defined(CONFIG_SENSOR_MMWAVE)
+  // Initialize the mmWave radar interface (BGT60TR13C on the shared SPI_A
+  // bus). Only the nRF-side GPIOs and the SPI transport come up here; the
+  // shield's power rail stays off until TURN_ON_MMWAVE arrives, so the
+  // battery-monitor ADC keeps the shared P0.07 pin during other sessions.
+  LOG_INF("Initializing mmWave radar...");
+  if (mmWave_HW_init() != 0) {
+    LOG_WRN("mmWave initialization failed - mmWave streaming disabled");
+  } else {
+    LOG_INF("mmWave radar initialized");
+  }
+#endif
+
   while (1) {
     k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
     //gpio_pin_set_dt(&ppg_sync_gpio, 1);

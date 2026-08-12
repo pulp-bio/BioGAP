@@ -3,8 +3,59 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# mmWave radar shield (Infineon BGT60TR13C).
+#
+# The radar is enabled like any other sensor, with CONFIG_SENSOR_MMWAVE in
+# prj.conf. It needs two things that Kconfig cannot provide, though, because
+# shield and devicetree selection happen here -- before find_package(Zephyr)
+# evaluates Kconfig: its shield definition (which declares the bgt60 node) and
+# overlays/mmwave.overlay (which frees the radar's IRQ/RST pins by disabling the
+# PDM microphone that shares them).
+#
+# So prj.conf is scanned for the option here and the two pieces are pulled in to
+# match. That keeps a single switch in one obvious place instead of requiring a
+# -D flag on the command line to be kept in sync with a Kconfig value.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/prj.conf" MMWAVE_PRJ_CONF_TEXT)
+# Leading newline so the first line matches the same pattern as every other one.
+# Requiring the newline is what makes "# CONFIG_SENSOR_MMWAVE=y" not count.
+set(MMWAVE_PRJ_CONF_TEXT "\n${MMWAVE_PRJ_CONF_TEXT}")
+set(MMWAVE_FROM_PRJ_CONF OFF)
+if(MMWAVE_PRJ_CONF_TEXT MATCHES "\n[ \t]*CONFIG_SENSOR_MMWAVE[ \t]*=[ \t]*y")
+    set(MMWAVE_FROM_PRJ_CONF ON)
+endif()
+
+# Escape hatch, mainly for CI: force the shield on without editing prj.conf.
+# Deliberately a different variable from the scan result above, so this does not
+# depend on how option() and a pre-existing normal variable interact (CMP0077).
+option(MMWAVE_SHIELD "Force the SENSEI mmWave radar shield on" OFF)
+
+# Radar-only image: the radar is driven through the Zephyr SPI subsystem and
+# owns SPIM4, reproducing the standalone BGT60TR13C firmware. ExG acquisition
+# does not work in this build (see overlays/mmwave_only.conf). Implies
+# MMWAVE_SHIELD, and overrides CONFIG_SENSOR_EEG/EMG from prj.conf.
+#
+#   west build -- -DMMWAVE_ONLY=ON
+option(MMWAVE_ONLY "Build a radar-only image (Zephyr SPI, no working ExG)" OFF)
+
 # Enable shields
 set(SHIELD "SENSEI_ExGShield SENSEI_PPGShield SENSEI_WiFi_SD_Shield_V1")
+
+if(MMWAVE_FROM_PRJ_CONF OR MMWAVE_SHIELD OR MMWAVE_ONLY)
+    string(APPEND SHIELD " SENSEI_mmWaveShield")
+    list(APPEND EXTRA_DTC_OVERLAY_FILE "${CMAKE_CURRENT_SOURCE_DIR}/overlays/mmwave.overlay")
+
+    # The ExG/PPG/WiFi shields stay in SHIELD even for a radar-only image: the
+    # unconditionally built afe/ and bsp/power sources reference their
+    # devicetree nodes, so dropping them would break the build rather than just
+    # disable ExG. Kconfig is what turns ExG off.
+    if(MMWAVE_ONLY)
+        list(APPEND EXTRA_CONF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/overlays/mmwave_only.conf")
+        message(STATUS "mmWave radar-only image (Zephyr SPI; ExG disabled)")
+    else()
+        list(APPEND EXTRA_CONF_FILE "${CMAKE_CURRENT_SOURCE_DIR}/overlays/mmwave.conf")
+        message(STATUS "mmWave radar enabled (shared SPI_A with ExG; PDM microphone disabled)")
+    endif()
+endif()
 
 set(CONF_FILE prj.conf)
 
@@ -59,9 +110,6 @@ target_sources(app PRIVATE
     sensors/imu/lsm6dsv16bx_sensor.c
     sensors/imu/driver/lsm6dsv16bx_reg.c
 
-    # Sensors - Microphone
-    sensors/mic/mic_appl.c
-
     # Sensors - EEG
     sensors/eeg/eeg_appl.c
 
@@ -73,11 +121,45 @@ target_sources(app PRIVATE
     ble/bluetooth.c
 )
 
+# Sensors - Microphone. mic_appl.c resolves the PDM device with
+# DEVICE_DT_GET(), so it only links when the devicetree node is enabled. The
+# mmWave build gives the microphone's CLK/DATA pins (P0.04/P0.12) to the radar
+# and disables &pdm0, and gets the reject-at-runtime variant instead, which
+# keeps the command dispatcher free of conditional compilation.
+if(CONFIG_AUDIO_DMIC)
+    target_sources(app PRIVATE
+        sensors/mic/mic_appl.c
+    )
+else()
+    target_sources(app PRIVATE
+        sensors/mic/mic_unavailable.c
+    )
+endif()
+
 # WULPUS ultrasound sensor (MSP430 bridge via SPI_B)
 if(CONFIG_SENSOR_WULPUS)
     target_sources(app PRIVATE
         sensors/wulpus/wulpus_appl.c
     )
+endif()
+
+# mmWave radar (BGT60TR13C). Shares SPI_A (spi/spi_a.c, unconditional above)
+# with the ADS1298 and the WiFi/SD shield.
+if(CONFIG_SENSOR_MMWAVE)
+    target_sources(app PRIVATE
+        sensors/mmWave/mmWave_appl.c
+        sensors/mmWave/driver/xensiv_bgt60trxx.c
+    )
+
+    # Two interchangeable SPI transports behind the same mmWave_spi.h API:
+    # the Zephyr SPI subsystem (radar owns SPIM4, reproduces the standalone
+    # reference firmware) or the raw nrfx SPI_A layer (radar shares the bus
+    # with the ADS1298 and the WiFi/SD shield).
+    if(CONFIG_MMWAVE_ZEPHYR_SPI)
+        target_sources(app PRIVATE sensors/mmWave/mmWave_spi_zephyr.c)
+    else()
+        target_sources(app PRIVATE sensors/mmWave/mmWave_spi.c)
+    endif()
 endif()
 
 # Diagnostic: PMIC-noise injection sweep (see bsp/pmic_noise_test.c)

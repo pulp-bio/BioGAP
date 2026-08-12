@@ -78,4 +78,21 @@
  * chunk 2 during ultrasound streaming. */
 #define REQUEST_SYSTEM_STATUS 43
 
+/* mmWave radar (BGT60TR13C, SENSEI mmWave shield).
+ *
+ * The radar has to be powered and configured before it can stream, so the
+ * host sequence is TURN_ON -> [CHANGE_*] -> CONFIGURE -> START, and
+ * STOP -> TURN_OFF on the way down (see sensors/mmWave/mmWave_appl.h).
+ *
+ * CHANGE_IFGAIN_MMWAVE, CHANGE_TXPOWER_MMWAVE and CHANGE_FPS_MMWAVE expect
+ * one parameter byte after the opcode; without it they are ignored. */
+#define START_MMWAVE_STREAMING 44
+#define STOP_MMWAVE_STREAMING 45
+#define CONFIGURE_MMWAVE 46
+#define TURN_OFF_MMWAVE 47
+#define TURN_ON_MMWAVE 48
+#define CHANGE_IFGAIN_MMWAVE 49
+#define CHANGE_TXPOWER_MMWAVE 50
+#define CHANGE_FPS_MMWAVE 51
+
 #endif // BLE_COMMANDS_H

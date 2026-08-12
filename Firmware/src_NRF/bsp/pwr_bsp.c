@@ -217,6 +217,38 @@ int wulpus_power_on(void) {
     return err ? -EIO : 0;
 }
 
+int mmwave_shield_power_on(void) {
+    LOG_INF("mmWave shield power on");
+    struct max77654_conf *pmic_conf = &pmic_h.conf;
+    int err = 0;
+
+    /* VD2 3.3V: the shield's digital supply, which the radar's own enable pin
+     * (P0.07) then gates locally. Nothing else brings this rail up for the
+     * mmWave shield -- pwr_bsp_start() is not called on this firmware, and the
+     * PMIC's default leaves VD2 too low for the BGT60TR13C, which shows up as
+     * an unrecognised chip ID (XENSIV_BGT60TRXX_STATUS_DEV_ERROR) on the first
+     * register read.
+     *
+     * Light load, so the low peak-current setting is used to keep VSYS ripple
+     * -- and the resulting BLE receiver desense -- down, exactly as the WULPUS
+     * shield does for the same rail. The rail is deliberately left up by
+     * mmWave_power_off(), since VD2 is shared with the other shields. */
+    /* 1 A peak, matching pwr_bsp_start() and the standalone reference firmware.
+     * The radar's inrush while its local regulators charge can exceed the
+     * light-load 0.33 A limit, which would make the rail sag exactly when the
+     * radar is running its power-on reset. */
+    pmic_conf->sbb_conf[2].mode = MAX77654_SBB_MODE_BUCKBOOST;
+    pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
+    pmic_conf->sbb_conf[2].active_discharge = false;
+    pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
+    pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
+
+    err |= pwr_rail_config_sbb(MAX77654_SBB2, "VD2 3.3V");
+    k_msleep(10);
+
+    return err ? -EIO : 0;
+}
+
 int pwr_bsp_start() {
   // Configure PMIC
   struct max77654_conf *pmic_conf = &pmic_h.conf;
@@ -237,7 +269,14 @@ int pwr_bsp_start() {
   pmic_conf->sbb_conf[2].peak_current = MAX77654_SBB_PEAK_CURRENT_1A;
   pmic_conf->sbb_conf[2].active_discharge = false;
   pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
+#if defined(CONFIG_SENSOR_MMWAVE)
+  /* VD2 is the shield digital supply, and the mmWave shield needs 3.3 V there.
+   * This mirrors the standalone BGT60TR13C firmware, whose only power-related
+   * change was raising this rail from 1.2 V. */
+  pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
+#else
   pmic_conf->sbb_conf[2].output_voltage_mV = 1200;
+#endif
 
   pmic_conf->ldo_conf[0].mode = MAX77654_LDO_MODE_LDO;
   pmic_conf->ldo_conf[0].active_discharge = false;
