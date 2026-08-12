@@ -116,13 +116,37 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+static inline bool validate_nrf_header(uint8_t header_byte)
+{
+    return (header_byte == NRF_EXG_HEADER || header_byte == WULPUS_HDR_XFER_0 ||
+            header_byte == WULPUS_HDR_XFER_1 || header_byte == WULPUS_HDR_XFER_2 ||
+            header_byte == WULPUS_HDR_XFER_3);
+}
+
 // =============================================================================
 // HELPER: Validate packet markers
 // =============================================================================
 /** @brief Check NRF_EXG_HEADER/TAILER framing on a received (RX) buffer. */
 static inline bool is_valid_packet(const uint8_t *data, const size_t packet_size)
 {
-    return (data[0] == NRF_EXG_HEADER && data[packet_size - 1] == NRF_EXG_TAILER);
+
+    // check header byte
+    /* Expand to match with the expected packet format*/
+    if (data[0] == NRF_EXG_HEADER && data[packet_size - 1] == NRF_EXG_TAILER){
+        /*Header and tailer for ExG data streaming*/
+        return true;
+    }
+
+    if (data[0] == WULPUS_FULL_HEADER && data[packet_size - 1] == WULPUS_FULL_TAILER) {
+        return true;
+    }
+    
+    else{
+        // In case where we send SPI packet from WULPUS
+        return validate_nrf_header(data[0]);
+    }
+
+    return false; 
 }
 
 /** @brief Free the DMA-capable TX/RX pre-queue buffers. */
@@ -231,6 +255,7 @@ static esp_err_t enter_stop_quiesce_state(void)
     bool stop_delivered = false;
     uint8_t send_stop_command_count = 0;
     bool stop_ack_received = false;
+
     while(stop_ack_received == false) {
         ret = spi_slave_get_trans_result(SPI_HOST_DEVICE, &ret_trans, pdMS_TO_TICKS(50));
         if (ret == ESP_OK) {
@@ -252,12 +277,33 @@ static esp_err_t enter_stop_quiesce_state(void)
                 ESP_LOGI(BIOGAP_READ_TAG, "STOP ACK received");
                 stop_ack_received = true;
                 send_stop_command_count = 0;
-            } 
+            }
             else {
                 send_stop_command_count++;
             }
+
+            /* Re-queue regardless of outcome -- tx_bufs[]'s content is
+             * untouched since the stomp above, so this just re-arms the
+             * same STOP pattern. Without this, the NRF's regular relay
+             * thread (draining whatever backlog it had, plus its own
+             * retried STOP-ack attempts) consumes QUEUE_COUNT slots one by
+             * one and is never given anything back; once all of them are
+             * gone the SPI slave has nothing left armed, so every further
+             * NRF transceive -- including the one carrying the actual
+             * STOP-ack -- just stalls with nothing to match against. That
+             * left this loop polling forever even though the NRF had
+             * already logged processing the stop. */
+            if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for stop-quiesce re-queue");
+            } else {
+                esp_err_t requeue_ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                SPI_BUS_UNLOCK();
+                if (requeue_ret != ESP_OK) {
+                    ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction during stop-quiesce: %s", esp_err_to_name(requeue_ret));
+                }
+            }
         }
-        }
+    }
 
     ESP_LOGI(BIOGAP_READ_TAG, "STOP command delivery confirmed after %d attempts", send_stop_command_count);
     node_state = STATE_IDLE;
@@ -278,25 +324,36 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 {
 
     uint64_t packet_count = 0;
-    uint16_t tx_counter = 0;  /* Transmit counter sent to master */
+    uint16_t tx_counter = 0;        /* Transmit counter sent to master */
+    uint16_t rx_counter_prev = 0;   /* Previous receive counter for detecting missed packets */
     esp_err_t ret;
-    ret = allocate_prequeue_resources();
     read_from_biogap_task_nrf_master_pq_esp_slave_handle = xTaskGetCurrentTaskHandle();
     bool first_read = true;
     /* === MAIN LOOP === */
     while (1) {
+
         /* === HANDSHAKE PHASE === */
         /* Handshake is executed at startup in main; block here until the connected bit is set */
         xEventGroupWaitBits(g_evt, B_BIOGAP_CONECTED, pdFALSE, pdFALSE, portMAX_DELAY);
-        /* Wait until a start command has been forwarded to BIOGAP (sleep until bit set) */
-        xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdFALSE, pdFALSE, portMAX_DELAY);
 
-        if(!prequeued){
+        if (!prequeued) {
+            /* propagate_first_start_command_to_biogap_master() (biogap_send.c)
+             * relays the GUI's whole config+start sequence as one blocking
+             * spi_slave_transmit() call, then -- once that's confirmed
+             * delivered -- allocates the bulk buffers and sets this bit.
+             * Waiting for it here means the bulk pool is never armed, and
+             * spi_slave_get_trans_result() is never called, while that
+             * transmit is still in flight: mixing spi_slave_transmit() with
+             * an ongoing queue on the same host is unsafe per the ESP-IDF
+             * SPI slave driver docs, and this avoids it by construction
+             * rather than by coordinating two tasks on the same queue. */
+            xEventGroupWaitBits(g_evt, B_START_CMD_FWD_TO_BIOGAP, pdTRUE, pdFALSE, portMAX_DELAY);
+
             ret = prequeue_transactions();
-            if (ret != ESP_OK) {
-                ESP_LOGE(BIOGAP_READ_TAG, "Failed to pre-queue transactions, cannot start streaming");
+            while (ret != ESP_OK) {
+                ESP_LOGE(BIOGAP_READ_TAG, "Failed to pre-queue transactions, retrying: %s", esp_err_to_name(ret));
                 vTaskDelay(pdMS_TO_TICKS(1000));
-                continue;
+                ret = prequeue_transactions();
             }
             prequeued = true;
         }
@@ -313,16 +370,19 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
             if(node_state != STATE_IDLE){
                 ret = enter_stop_quiesce_state();
-                xEventGroupClearBits(g_evt, B_START_CMD_FWD_TO_BIOGAP); 
-                ESP_LOGI(BIOGAP_READ_TAG, "STOP command processed, returning to idle state"); 
-                first_read = true; 
+                ESP_LOGI(BIOGAP_READ_TAG, "STOP command processed, returning to idle state");
+                first_read = true;
                 continue;
             }
             continue; // jump to the top of the loop
         }
         else{
-
-            if (node_state == STATE_STREAMING){
+            /* By this point the bulk pool is always armed (see the
+             * B_START_CMD_FWD_TO_BIOGAP wait above) -- config-relay is
+             * handled entirely by biogap_send.c via a blocking
+             * spi_slave_transmit(), before this task ever calls
+             * spi_slave_get_trans_result(). */
+            {
                 spi_slave_transaction_t *ret_trans = NULL;
                 if (!SPI_BUS_LOCK(portMAX_DELAY)) {
                     ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for transaction receive");
@@ -339,13 +399,51 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 }
 
                 size_t rx_bytes = (size_t)(ret_trans->trans_len / 8);
+
                 if(rx_bytes < 4){
-                    continue; // ignore empty packets 
+                    /* Ignore empty packets, but the slot must still be
+                     * re-armed -- ret_trans was already pulled out of the
+                     * driver's queue by spi_slave_get_trans_result() above,
+                     * so skipping this would permanently shrink the
+                     * pre-queued pool by one slot. */
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after empty packet");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after empty packet: %s", esp_err_to_name(ret));
+                        break;
+                    }
+                    continue;
                 }
                 uint8_t *rx_data = (uint8_t *)ret_trans->rx_buffer;
                 uint8_t *tx_data = (uint8_t *)ret_trans->tx_buffer;
 
-                /* Validate packet markers (header + tailer) on what the NRF actually
+                if (node_state != STATE_STREAMING) {
+                    /* Not streaming yet -- drop and re-arm rather than
+                     * misinterpreting stray bytes as data. */
+                    ESP_LOGW(BIOGAP_READ_TAG, "Unexpected transaction while idle: hdr=0x%02X, dropping", rx_data[0]);
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue while idle");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction while idle: %s", esp_err_to_name(ret));
+                        break;
+                    }
+                    continue;
+                }
+
+                /* === NRF DATA PROCESSING === (modality-agnostic: EXG,
+                 * ultrasound/WULPUS, or whatever else shares this pool --
+                 * the counter check and add_to_ringbuffer() below don't
+                 * care which, they key off the header byte itself.)
+                 *
+                 * Validate packet markers (header + tailer) on what the NRF actually
                  * sent. This is the only meaningful integrity check available: the
                  * ESP's own echoed tx buffer has ESP_EXG_TAILER pre-filled at every
                  * position from byte[3] onward (allocate_prequeue_resources()) so
@@ -353,14 +451,39 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                  * in biogap_to_esp_transaction() passes -- which also means a tx-side
                  * check here would trivially pass regardless of transfer integrity. */
                 if (!is_valid_packet(rx_data, rx_bytes)) {
-                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X (expected 0x%02X/0x%02X)",
-                            rx_data[0], rx_data[rx_bytes - 1], NRF_EXG_HEADER, NRF_EXG_TAILER);
-                    break;
+                    /* Not necessarily corruption: the NRF sends a dedicated
+                     * STOP-ACK transceive (header/tailer 0xE6/0xBB) whenever
+                     * it thinks the ESP asked to stop, which can be a false
+                     * positive -- ESP_STOP_COMMAND (245) collides with the
+                     * regular streaming reply's counter MSB once every
+                     * 65536-count wrap. Drop this one transaction and keep
+                     * the slot armed rather than killing the whole task. */
+                    ESP_LOGW(BIOGAP_READ_TAG, "Invalid packet: hdr=0x%02X tail=0x%02X rx_bytes=%u -- dropping, re-arming slot",
+                            rx_data[0], rx_data[rx_bytes - 1], (unsigned)rx_bytes);
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after invalid packet");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after invalid packet: %s", esp_err_to_name(ret));
+                        break;
+                    }
+                    continue;
                 }
 
                 /* Extract counter (little-endian at bytes[1:2]) */
-                uint16_t counter = (rx_data[2] << 8) | rx_data[1];
-                packet_count++;
+                /* Note: this will break with the WULPUS logic*/
+
+                if(rx_data[0] == WULPUS_HDR_XFER_0 || rx_data[0] == NRF_EXG_HEADER){
+                    uint16_t counter = (rx_data[2] << 8) | rx_data[1];
+                    if(counter != (rx_counter_prev+1)){
+                        ESP_LOGW(BIOGAP_READ_TAG, "Missed packet(s): expected counter %d, got %d", rx_counter_prev+1, counter);
+                    }
+                    rx_counter_prev = counter;
+                    packet_count++;
+                }
 
                 /* Add packet to ringbuffer */
                 if(first_read == true){
@@ -370,20 +493,53 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
                 ret = add_to_ringbuffer(rx_data, rx_bytes);
                 if (ret != ESP_OK) {
                     ESP_LOGW(BIOGAP_READ_TAG, "Failed to add packet to ringbuffer");
-                    xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
+
+                    if (BACKPRESSURE_ON == 1) {
+                        ESP_LOGW(BIOGAP_READ_TAG, "Dropping packet due to ringbuffer full (backpressure disabled)");
+                        xEventGroupSetBits(g_evt, B_RINGBUFFER_FULL);
+                    }
+
+                    else{
+                        ESP_LOGW(BIOGAP_READ_TAG, "Ringbuffer full...");
+                    }
+                    
                     // check if the stop command has not been set already to avoid setting it multiple times
                     if(xEventGroupGetBits(g_evt) & B_STOP_CMD_RCV_GUI){
                         ESP_LOGI(BIOGAP_READ_TAG, "STOP command already received, not forwarding another STOP to BIOGAP master");
                     }
                     else{
-                        ESP_LOGI(BIOGAP_READ_TAG,"Setting Stop CMD from rinfugg");
-                        rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
-                        xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
+                        if(BACKPRESSURE_ON == 1){
+                            ESP_LOGI(BIOGAP_READ_TAG, "Setting Stop CMD from ringbuffer full");
+                            rx_gui_data_to_fwd[0] = STOP_DUMMY_STREAMING;
+                            xEventGroupSetBits(g_evt, B_STOP_CMD_RCV_FORCED);
+                        }
+                    }
+                    /* Hand the slot back even though this packet was dropped --
+                     * otherwise the pre-queued pool permanently shrinks by one
+                     * slot per ringbuffer-full event. */
+                    if (!SPI_BUS_LOCK(portMAX_DELAY)) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to lock SPI bus mutex for re-queue after ringbuffer-full drop");
+                        break;
+                    }
+                    ret = spi_slave_queue_trans(SPI_HOST_DEVICE, ret_trans, 0);
+                    SPI_BUS_UNLOCK();
+                    if (ret != ESP_OK) {
+                        ESP_LOGE(BIOGAP_READ_TAG, "Failed to re-queue transaction after ringbuffer-full drop: %s", esp_err_to_name(ret));
+                        break;
                     }
                     continue; // jump to next iteration so the STOP check can run immediately
                 }
                 /* Update the descriptor's TX buffer for its next transaction */
                 tx_counter++;  /* Advance transmit counter */
+                /* The NRF treats byte[2] == ESP_STOP_COMMAND (245) as a real
+                 * stop request (biogap_to_esp_transaction()), but byte[2] is
+                 * just this counter's high byte -- it would otherwise pass
+                 * through 245 once every 65536-count wrap with no stop
+                 * actually requested. Skip the whole colliding block so that
+                 * never happens. */
+                if (((tx_counter >> 8) & 0xFF) == ESP_STOP_COMMAND) {
+                    tx_counter += 256;
+                }
                 tx_data[0] = ESP_EXG_HEADER;
                 //tx_data[PACKET_SZ - 1] = ESP_EXG_TAILER;
                 tx_data[1] = tx_counter & 0xFF;  /* LSB of counter */

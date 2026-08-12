@@ -90,12 +90,26 @@ not be sent.
 
 ### Sharing SPI_A with the ADS1298
 
-In the combined image both shields sit on SPI_A, and only one SPI dialect can be
-active at a time. The radar's chip-select callback doubles as the bus lock: it
-takes `spi_a_mutex`, waits for any in-flight transfer to finish, switches the
-peripheral to mode 0, and restores the ADS1298's mode 1 / 4 MHz on release. The
-ADS1298 takes the same mutex, always from thread context, so the two serialise
-cleanly.
+In the combined image the radar, the ADS1298 and the Wi-Fi/SD shield all sit on
+SPI_A, and only one SPI dialect can be active at a time. The radar's chip-select
+callback doubles as the bus lock: it takes `spi_a_mutex`, waits for any in-flight
+transfer to finish, captures the current configuration with
+`spi_a_save_config()`, switches the peripheral to mode 0, and puts the saved
+configuration back on release. Every other consumer takes the same mutex, so they
+all serialise cleanly.
+
+It saves and restores rather than resetting to a fixed idle setting because the
+clock on SPI_A belongs to whichever consumer is active: the ADS1298 runs at
+`SPI_A_ADS_CMD_SAFE_FREQ_HZ` (4 MHz) while issuing commands and
+`SPI_A_ADS_STREAMING_FREQ_HZ` (8 MHz) once in RDATAC, and the ESP32 switches to
+`SPI_A_ESP_STREAMING_FREQ_HZ` (32 MHz) for the duration of each transfer.
+Restoring a compile-time constant would silently reclock somebody else's session.
+
+Two mechanisms coexist deliberately: `spi_a_set_frequency()` tears the peripheral
+down and re-initialises it, which suits a change that lasts a whole acquisition
+phase, while `spi_a_reconfigure()` rewrites only the CONFIG and FREQUENCY
+registers, which is cheap enough to do per transaction — as the radar must, since
+it is the only consumer that needs a different SPI *mode*.
 
 The cost is bus-hold latency. A radar FIFO read is ~390 bytes at 8 MHz, so the
 radar owns the bus for roughly 400 µs once per frame. At the default 100 fps

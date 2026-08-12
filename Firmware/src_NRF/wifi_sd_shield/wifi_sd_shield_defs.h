@@ -105,7 +105,7 @@
  *  matters. */
 #define NRF_STOP_ACK_MASK 0x80
 
-#define ESP_PCKT_MAX_SIZE 820           // Set for now equal to the max size of WULPUS packets    
+#define ESP_PCKT_MAX_SIZE 850           // Set for now equal to the max size of WULPUS packets    
 #define ESP_SEND_QUEUE_SIZE 4           // Max number of packets that can be queued for sending to ESP. 
                                         // Adjust as needed based on expected traffic and memory constraints.     
 /** @brief Boolean to verify successful connection between NRF and ESP */
@@ -129,4 +129,9 @@ typedef enum {
 } nrf_to_esp_comm_state_t; 
 extern nrf_to_esp_comm_state_t nrf_esp_comm_state;
 extern bool serve_esp_requests; // Flag to control whether to process incoming ESP data,to avoid SPI bus contention during critical operations
+
+/* TEMP DIAGNOSTIC: when true, both WiFi/SD SPI_A threads skip all bus
+ * activity, so ADS reads can be tested in isolation. Remove once the
+ * ADS/WiFi_SD SPI_A hang is root-caused. */
+extern volatile bool wifi_sd_paused;
 #endif // WIFI_SD_SHIELD_DEFS_H

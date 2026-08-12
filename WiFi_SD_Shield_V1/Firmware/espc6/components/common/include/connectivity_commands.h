@@ -42,10 +42,23 @@
 #define STOP_DUMMY_STREAMING 244
 #define ESP_STOP_COMMAND 245
 
+/** @brief NRF_EXG packet markers */
 #define NRF_EXG_HEADER            0x55
 #define NRF_EXG_TAILER            0xAA
 #define ESP_EXG_HEADER            0x66
 #define ESP_EXG_TAILER            0xBB
-#define NRF_EXG_PACKET_SIZE       211
+
+/** @brief WULPUS packet markers */
+#define WULPUS_HDR_XFER_0      0x10
+#define WULPUS_HDR_XFER_1      0x11
+#define WULPUS_HDR_XFER_2      0x12
+#define WULPUS_HDR_XFER_3      0x13
+
+/** @brief WULPUS packet markers when entire frame is received */
+#define WULPUS_FULL_HEADER          0xCC
+#define WULPUS_FULL_TAILER          0xDD
+
+#define BIOGUI_CHECK_HEADER        0x55
+#define BIOGUI_CHECK_TAILER        0xAA
 
 #endif // CONNECTIVITY_COMMANDS_H

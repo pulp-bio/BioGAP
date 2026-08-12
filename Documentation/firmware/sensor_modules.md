@@ -279,10 +279,14 @@ There are two interchangeable transports behind the same `mmWave_spi.h` API, so
 **Shared (`mmWave_spi.c`, default).** SPI_A is shared with the ADS1298 AFEs and
 the WiFi/SD shield, and the radar is the only device on it needing a different
 SPI dialect. The driver's chip-select callback therefore doubles as the bus lock:
-it takes `spi_a_mutex` and switches the peripheral to mode 0 when CS is asserted,
-then restores mode 1 / 4 MHz and releases the mutex when CS is deasserted. The
-vendor driver brackets every register access and FIFO burst in exactly one such
-CS pair, so the radar never leaves the bus misconfigured for the ADS1298.
+when CS is asserted it takes `spi_a_mutex`, captures the current bus
+configuration with `spi_a_save_config()` and switches the peripheral to mode 0;
+when CS is deasserted it puts that saved configuration back and releases the
+mutex. It restores what it found rather than a fixed setting because the clock
+belongs to whichever consumer is active — the ADS1298 at 4 or 8 MHz depending on
+phase, the ESP32 at 32 MHz. The vendor driver brackets every register access and
+FIFO burst in exactly one such CS pair, so the radar never leaves the bus
+misconfigured for whoever had it.
 
 Holding the mutex is not sufficient on its own: the ADS1298 driver releases it as
 soon as it has queued an asynchronous transfer, so one may still be running. Since

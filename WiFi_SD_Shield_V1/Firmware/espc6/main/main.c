@@ -97,12 +97,17 @@ void app_main()
         ESP_LOGI(MAIN_TAG, "NRF-ESP SPI bus initialized successfully");
     #endif
 
-    while(1){
+
+    uint8_t handshake_attempts = 0;
+    while (handshake_attempts < 1) {
+    //while(1){
         ret = initial_handshake_nrf_master_esp_slave_pq();
         if (ret == 0) {
-            ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
+            //ESP_LOGI(MAIN_TAG, "Initial handshake with NRF master successful");
+            ESP_LOGI(MAIN_TAG, "handshake num %d successful", handshake_attempts);
             current_spi_mode = SPI_MODE_NRF;
-            break;
+            handshake_attempts+=1; 
+            //break;
         } else {
             ESP_LOGE(MAIN_TAG, "Initial handshake failed, retrying in 1 second: %s", esp_err_to_name(ret));
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -122,9 +127,13 @@ void app_main()
     
     xEventGroupSetBits(g_evt, B_WIFI_CONNECTED);
 
+
+
+
 #if ESP_LOCAL_DUMMY_SENSOR
     // ESP-only dummy sensor test: bypasses SPI/BIOGAP entirely. Generates synthetic
-    // dummy-sensor packets locally and streams them to BioGUI over the TCP connection,
+    // dummy-sensor packets locally
+     and streams them to BioGUI over the TCP connection,
     // to test the WiFi/GUI half of the system without any nRF/SPI hardware attached.
     biogap_ringbuf = xRingbufferCreate(RINGBUFF_SIZE, RINGBUF_TYPE_NOSPLIT);
     if (biogap_ringbuf == NULL) {
@@ -183,17 +192,27 @@ void app_main()
     xEventGroupSetBits(g_evt, B_GUI_SOCKET_BIND);
     node_state = STATE_IDLE;
     ESP_LOGI(MAIN_TAG, "WiFi initialized and bound to GUI successfully");
-    
     // ========================== START ALL THE TASKS =============================
 
-    BaseType_t xr = xTaskCreate(read_from_biogap_task_nrf_master_esp_slave_prequeue, "read_biogap_task_nrf_master", 4096, NULL, 1, &read_from_biogap_task_nrf_master_pq_esp_slave_handle);
+    /* Priorities: both biogap tasks (real SPI relay to/from the NRF,
+     * including STOP handling) sit ABOVE the GUI-facing network tasks
+     * below, not below them as before. ESP32-C6 is single-core with strict
+     * priority-preemptive scheduling -- a lower-priority task gets zero CPU
+     * while any higher-priority task is ready. tx_to_gui mostly blocks
+     * (successful send()s, or an empty ringbuffer) so this normally doesn't
+     * matter, but once the GUI's socket goes bad, send_all() fails fast
+     * (no blocking) and tx_to_gui becomes a tight back-to-back loop for as
+     * long as the ringbuffer keeps having items -- which, at the old
+     * priorities, could starve read_from_biogap_task_nrf_master_esp_slave_prequeue
+     * (including its STOP-quiesce poll) for as long as that lasted. */
+    BaseType_t xr = xTaskCreate(read_from_biogap_task_nrf_master_esp_slave_prequeue, "read_biogap_task_nrf_master", 4096, NULL, 5, &read_from_biogap_task_nrf_master_pq_esp_slave_handle);
     if (xr != pdPASS) {
         ESP_LOGE(MAIN_TAG, "Failed to create read_from_biogap task (err=%d)", xr);
     } else {
         ESP_LOGI(MAIN_TAG, "Created read_from_biogap task");
     }
 
-    xr = xTaskCreate(send_to_biogap_task_nrf_master_esp_slave, "send_to_biogap_task_nrf_master", 4096, NULL, 2, &send_to_biogap_task_nrf_master_esp_slave_handle);
+    xr = xTaskCreate(send_to_biogap_task_nrf_master_esp_slave, "send_to_biogap_task_nrf_master", 4096, NULL, 4, &send_to_biogap_task_nrf_master_esp_slave_handle);
     if (xr != pdPASS) {
         ESP_LOGE(MAIN_TAG, "Failed to create send_to_biogap task (err=%d)", xr);
     } else {

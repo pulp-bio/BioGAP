@@ -41,6 +41,7 @@
 
 
 #include "core/i2c_helpers.h"
+#include "bsp/pmic_bsp.h"
 
 // ======== Defines/Variables ======================================================================
 
@@ -187,7 +188,9 @@ int wulpus_power_on(void) {
     pmic_conf->sbb_conf[2].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[2].output_voltage_mV = 3300;
 
+    LOG_INF("WULPUS: configuring VD2 rail...");
     err |= pwr_rail_config_sbb(MAX77654_SBB2, "VD2 3.3V");
+    LOG_INF("WULPUS: VD2 rail configured (err=%d)", err);
     k_msleep(10);
 
     // VD0 set to 5V - must come up BEFORE VA0: the LDO0 input (VA0) is
@@ -202,7 +205,9 @@ int wulpus_power_on(void) {
     pmic_conf->sbb_conf[0].en = MAX77654_REG_ON;
     pmic_conf->sbb_conf[0].output_voltage_mV = 5000;
 
+    LOG_INF("WULPUS: configuring VD0 rail...");
     err |= pwr_rail_config_sbb(MAX77654_SBB0, "VD0 5V");
+    LOG_INF("WULPUS: VD0 rail configured (err=%d)", err);
     k_msleep(10);
 
     // VA0 set to 3.3V (LDO0, post-regulated from VD0)
@@ -211,7 +216,9 @@ int wulpus_power_on(void) {
     pmic_conf->ldo_conf[0].en = MAX77654_REG_ON;
     pmic_conf->ldo_conf[0].output_voltage_mV = 3300;
 
+    LOG_INF("WULPUS: configuring VA0 rail...");
     err |= pwr_rail_config_ldo(MAX77654_LDO0, "VA0 3.3V");
+    LOG_INF("WULPUS: VA0 rail configured (err=%d)", err);
     k_msleep(10);
 
     return err ? -EIO : 0;

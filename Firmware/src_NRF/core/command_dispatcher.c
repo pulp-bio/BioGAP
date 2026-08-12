@@ -53,6 +53,9 @@ uint16_t esp_spi_packet_size = 0; // Global variable to hold the size of the cur
 #include "sensors/mmWave/mmWave_appl.h"
 #endif
 
+uint8_t ads_config[5] = {6, 5, 2, 4, 0x10};      // For Exg Data. Hard-coded config with square wave
+bool wulpus_restart_rcv = false;
+
 LOG_MODULE_REGISTER(command_dispatcher, LOG_LEVEL_DBG);
 
 /**
@@ -206,7 +209,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
   #if defined(CONFIG_DUMMY_SENSOR)
-    esp_spi_packet_size = DUMMY_SENSOR_PCKT_SIZE; // Set the expected SPI packet size for dummy sensor
+    //esp_spi_packet_size = DUMMY_SENSOR_PCKT_SIZE; // Set the expected SPI packet size for dummy sensor
     dummy_sensor_start_streaming();
   #else
     LOG_WRN("Dummy sensor not built (CONFIG_DUMMY_SENSOR=n) - ignoring START_DUMMY_STREAMING");
@@ -234,13 +237,19 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EEG_STREAMING:
     LOG_INF("Ping START_EEG_STREAMING");
+    // the other bytes are the ads configuration
+    memcpy(ads_config, data + 1, 5);
+    LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
 
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset BLE packet counters for new session */
   #else
-    /* TODO: reset WiFi transport packet counters */
+    if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+        LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+    }
+    nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
-    eeg_start_streaming();
+    eeg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EEG_STREAMING:
@@ -249,19 +258,26 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
-    /* TODO: print WiFi transport stats */
+    nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
   #endif
     break;
 
   case START_EMG_STREAMING:
     LOG_INF("Ping START_EMG_STREAMING");
+    // the other bytes are the ads configuration
+    memcpy(ads_config, data + 1, 5);
+    LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
+
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset packet counters for new session */
   #else
-    /* TODO: reset WiFi transport packet counters */
+    if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+        LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+    }
+    nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
   #endif
     LOG_INF("Starting EMG streaming");
-    emg_start_streaming();
+    emg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EMG_STREAMING:
@@ -270,7 +286,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
-    /* TODO: print WiFi transport stats */
+    nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
   #endif
     break;
 
@@ -330,16 +346,42 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_WULPUS_STREAMING:
     #if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Ping START_WULPUS_STREAMING");
-    /* Any bytes after the command code are forwarded as MSP430 config */
-    wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
+      LOG_INF("Ping START_WULPUS_STREAMING");
+
+      #if defined(CONFIG_WI_FI)
+        // ESP relay accumulates the whole config+start sequence and sends it
+        // as one control frame, so both packages are already back-to-back
+        // in data[] -- no need to wait for a second, separate dispatch.
+
+        LOG_INF("WULPUS config package received, forwarding to wulpus_set_msp_config");
+
+        if (nrf_esp_comm_state != NRF_ESP_IDLE) {
+            LOG_INF("NRF-ESP communication state is not idle (current state: %d) - new streaming session may be delayed until current communication is complete.", nrf_esp_comm_state);
+        }
+        nrf_esp_comm_state = SEND_TO_ESP; // Set state to allow sending data to ESP
+        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
+        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
+        LOG_INF("WULPUS config package forwarded to wulpus_set_msp_config");
+        wulpus_cfg_sent = true; // Set the flag to indicate that the WULPUS config has been sent to the MSP430
+
+      #else
+        // BLE streaming -- packet can be fragmented; the conf package
+        // arrives later as its own separate dispatch, via default: below.
+        wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
+      #endif
+
+      wulpus_restart_rcv = true; // Set the flag to indicate that a restart command has been received
     #endif
     break;
 
   case STOP_WULPUS_STREAMING:
     #if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Ping STOP_WULPUS_STREAMING");
-    wulpus_stop();
+      LOG_INF("Ping STOP_WULPUS_STREAMING");
+      wulpus_stop();
+      wulpus_restart_rcv = false;
+      #if defined(CONFIG_WI_FI)
+        nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
+      #endif
     #endif
     break;
 
@@ -362,7 +404,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     #endif
     sync_begin(2);               /* Setup sync barrier for 2 subsystems (EEG + MIC) */
     mic_start_streaming();
-    eeg_start_streaming();
+    eeg_start_streaming(&ads_config[0]);
     break;
 
   case STOP_EEG_MIC_STREAMING:
@@ -388,7 +430,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   #endif
     sync_begin(3);               /* Setup sync barrier for 2 subsystems (EEG + MIC + IMU) */
     mic_start_streaming();
-    eeg_start_streaming();
+    eeg_start_streaming(&ads_config[0]);
     imu_start_streaming();
     break;
 
@@ -488,12 +530,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
      * configuration for the WULPUS dongle (which sends raw config bytes
      * without a preceding command code, exactly as the old nRF52 firmware).
      */
-#if defined(CONFIG_SENSOR_WULPUS)
-    LOG_INF("Unrecognised cmd %u - treating as WULPUS MSP430 config", cmd);
-    wulpus_set_msp_config(data, size);
-#else
-    LOG_WRN("Unrecognised command: %u", cmd);
-#endif
+    #if defined(CONFIG_SENSOR_WULPUS)
+        if (wulpus_restart_rcv == true) {
+          LOG_INF("Received WULPUS configuration after restart command, forwarding to wulpus_set_msp_config");
+          wulpus_set_msp_config(data, size);
+        }
+    #else
+        LOG_WRN("Unrecognised command: %u", cmd);
+    #endif
     break;
   }
 }

@@ -152,7 +152,7 @@ int emg_init(void);
  * @return -EALREADY if already streaming
  * @return -EBUSY if not in idle state
  */
-int emg_start_streaming(void);
+int emg_start_streaming(uint8_t *ads_config);
 
 /**
  * @brief Stop EMG streaming

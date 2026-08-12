@@ -73,8 +73,9 @@ esp_err_t add_to_ringbuffer(const uint8_t *data, size_t len);
 #define ESP_SPI_HEADER 0x66             // Header byte for every ESP <--> NRF transaction, to verify correct data parsing
 #define ESP_SPI_TAILER 0xBB             // Tailer byte for every ESP <--> NRF transaction, to verify correct data parsing
 #define NRF_STOP_ACK_MASK 0x80         // Bit mask for STOP ACK in the NRF's response header byte
+
 /* Pre-queue configuration: keep this many transactions armed at all times */
-#define QUEUE_COUNT 4
+#define QUEUE_COUNT 15
 
 /* Persistent TX buffer shared with pre-queued SPI descriptors (allocated in reader) */
 extern uint8_t *sendbuf_persistent;

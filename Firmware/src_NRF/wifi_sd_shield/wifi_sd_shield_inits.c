@@ -41,7 +41,11 @@ LOG_MODULE_REGISTER(wifi_sd_shield_inits, LOG_LEVEL_INF);
 bool esp_data_ready = false;
 bool first_esp_data_ready = true;
 bool serve_esp_requests = false; // Flag to control whether to process incoming ESP data, to avoid SPI bus contention during critical operations
+
 nrf_to_esp_comm_state_t nrf_esp_comm_state = NRF_ESP_IDLE; // State variable to manage NRF-ESP communication flow
+
+// TEMP DIAGNOSTIC: see wifi_sd_shield_defs.h
+volatile bool wifi_sd_paused = false;
 
 /* GPIO device specs - defined in device tree overlay */
 static const struct gpio_dt_spec drdy_gpio = GPIO_DT_SPEC_GET(DRDY_GPIO_NODE, gpios);

@@ -58,7 +58,7 @@ esp_err_t init_nrf_spi_master_esp_slave_bus(void)
     spi_slave_interface_config_t slvcfg = {
         .mode = 1,                   // SPI Mode 1 required for DMA (CPOL=0, CPHA=1)
         .spics_io_num = NRF_ESP_CS,
-        .queue_size = 10,            // sets how many transactions can be in the air. Must be higher for larger transaction intervals
+        .queue_size = QUEUE_COUNT,
         .flags = 0
     };
 

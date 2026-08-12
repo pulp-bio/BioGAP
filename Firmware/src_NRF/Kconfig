@@ -321,6 +321,13 @@ config DUMMY_SENSOR
 	  shield when CONFIG_WI_FI is also enabled). Useful for exercising the
 	  streaming pipeline without an ADS1298/ExG shield attached.
 
+
+config GAP9
+	bool "GAP9 coprocessor on board"
+	default n
+	help
+	  Enables the GAP9 coprocessor on the BioGAP board. 
+	  
 config PMIC_NOISE_TEST
 	bool "PMIC noise-injection test (diagnostic build)"
 	default n

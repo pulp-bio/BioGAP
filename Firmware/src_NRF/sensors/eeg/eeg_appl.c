@@ -60,6 +60,12 @@
 // Include inter-board hardware synchronization
 #include "core/board_sync.h"
 
+#include "spi/spi_a.h"
+
+#if defined(CONFIG_WI_FI)
+#include "wifi_sd_shield/wifi_sd_shield_defs.h"
+#endif
+
 extern uint16_t counter;
 
 LOG_MODULE_REGISTER(eeg_appl, LOG_LEVEL_INF);
@@ -77,11 +83,11 @@ static uint8_t eeg_tx_buf[EEG_PCKT_SIZE];
 static uint8_t eeg_buf_idx = 0;
 static uint8_t eeg_pkt_counter = 0;
 static eeg_config_t eeg_config = {
-    .sample_rate = 6,
-    .ads_mode = 0,
+    .sample_rate = 6,      // 3=4kSPS, 4=2kSPS, 5=1kSPS, 6=500SPS (firmware default).
+    .ads_mode = 5,        // 0 for normal operation, 
     .channel_2_func = 2,
     .channel_4_func = 4,
-    .gain = 0
+    .gain = 0x10,
 };
 static bool first_run = true;
 
@@ -125,7 +131,7 @@ int eeg_init(void) {
   return 0;
 }
 
-int eeg_start_streaming(void) {
+int eeg_start_streaming(uint8_t *ads_config) {
   if (!IS_ENABLED(CONFIG_SENSOR_EEG)) {
     LOG_ERR("EEG support not enabled in this build (CONFIG_SENSOR_EEG)");
     return -ENOTSUP;
@@ -148,6 +154,11 @@ int eeg_start_streaming(void) {
 
   LOG_INF("Starting EEG streaming");
 
+#if defined(CONFIG_WI_FI)
+  // TEMP DIAGNOSTIC: pause WiFi/SD SPI_A activity to test ADS reads in isolation
+  wifi_sd_paused = false;
+#endif
+
   eeg_state = EEG_STATE_STARTING;
   eeg_keep_running = true;
   eeg_buf_idx = 0;
@@ -160,12 +171,27 @@ int eeg_start_streaming(void) {
   }
   k_msleep(300);
 
+  /* ADS1298 command bytes (RESET/SDATAC/RREG/WREG below) need tSDECODE
+   * (4 tCLK) between bytes to decode -- SPI_A's streaming rate can outrun
+   * that, so drop to a safe rate for this one-time command sequence and
+   * restore full speed once it's done (see SPI_A_ADS_CMD_SAFE_FREQ_HZ). */
+  spi_a_set_frequency(SPI_A_ADS_CMD_SAFE_FREQ_HZ);
+
   if (first_run) {
     LOG_INF("Checking ADS1298 device IDs");
-    if (ads_check_id(ADS1298_A) != 0 || ads_check_id(ADS1298_B) != 0) {
-      LOG_ERR("ADS1298 ID check failed - powering rails off, EEG start aborted "
+    if (ads_check_id(ADS1298_A) != 0) {
+      LOG_ERR("ADS1298 A ID check failed - powering rails off, EEG start aborted "
               "(check battery voltage / shield)");
       power_ads_off();
+      spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
+      eeg_state = EEG_STATE_ERROR;
+      return -EIO;
+    }
+    if (ads_check_id(ADS1298_B) != 0) {
+      LOG_ERR("ADS1298 B ID check failed - powering rails off, EEG start aborted "
+              "(check battery voltage / shield)");
+      power_ads_off();
+      spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
       eeg_state = EEG_STATE_ERROR;
       return -EIO;
     }
@@ -174,15 +200,12 @@ int eeg_start_streaming(void) {
   }
 
   LOG_INF("Initializing ADS1298 devices with provided parameters");
-  uint8_t ads_params[5] = {
-      eeg_config.sample_rate,
-      eeg_config.ads_mode,
-      eeg_config.channel_2_func,
-      eeg_config.channel_4_func,
-      eeg_config.gain
-  };
-  ads_init(ads_params, ADS1298_A);
-  ads_init(ads_params, ADS1298_B);
+
+  ads_init(ads_config, ADS1298_A);
+  ads_init(ads_config, ADS1298_B);
+
+  /* Command sequence done -- back to full speed for RDATAC streaming. */
+  spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
 
   /* Signal thread to complete startup (sync barrier + ads_start) */
   k_sem_give(&eeg_start_sem);
@@ -198,6 +221,11 @@ int eeg_stop_streaming(void) {
   }
 
   LOG_INF("Stopping EEG streaming");
+
+#if defined(CONFIG_WI_FI)
+  // TEMP DIAGNOSTIC: see wifi_sd_shield_defs.h
+  wifi_sd_paused = false;
+#endif
 
   eeg_state = EEG_STATE_STOPPING;
   eeg_keep_running = false;
@@ -263,7 +291,6 @@ static void eeg_streaming_thread(void *arg1, void *arg2, void *arg3) {
     LOG_INF("Starting ADS1298 data acquisition");
     ads_start();
     LOG_INF("ADS1298 started");
-
     eeg_state = EEG_STATE_STREAMING;
     ads_set_function(ADS_READ);
 

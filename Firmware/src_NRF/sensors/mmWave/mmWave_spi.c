@@ -102,6 +102,15 @@ void *const mmwave_spi_iface = &iface_token;
 /** @brief SPI clock currently used for radar transfers */
 static nrf_spim_frequency_t mmwave_spi_freq = MMWAVE_SPI_FREQ_DEFAULT;
 
+/** @brief Bus configuration captured on select, put back on release.
+ *
+ * Not a fixed idle setting: the clock on SPI_A belongs to whichever consumer is
+ * active -- the ADS1298 runs at SPI_A_ADS_CMD_SAFE_FREQ_HZ while issuing
+ * commands and SPI_A_ADS_STREAMING_FREQ_HZ once in RDATAC, the ESP32 at
+ * SPI_A_ESP_STREAMING_FREQ_HZ -- so restoring a constant here would silently
+ * reclock somebody else's session. */
+static spi_a_config_t saved_bus_config;
+
 /* Peripheral state captured at the instant the last transfer completed, while
  * the radar still owned the bus. Sampling it later is useless: the chip-select
  * callback has by then restored the ADS1298's mode and clock, so a log taken
@@ -273,6 +282,7 @@ void xensiv_bgt60trxx_platform_spi_cs_set(const void *iface, bool val) {
 
 #if !defined(CONFIG_MMWAVE_SPI_STATIC_MODE)
     wait_for_bus_idle();
+    spi_a_save_config(&saved_bus_config);
     spi_a_reconfigure(MMWAVE_SPI_MODE, mmwave_spi_freq);
 #endif
     gpio_pin_set_raw(cs_pin.port, cs_pin.pin, 0);
@@ -284,7 +294,7 @@ void xensiv_bgt60trxx_platform_spi_cs_set(const void *iface, bool val) {
        * still be running, and restoring the configuration under it would
        * corrupt the tail of the transfer. */
       wait_for_bus_idle();
-      spi_a_restore_default_config();
+      spi_a_restore_config(&saved_bus_config);
 #endif
       bus_held = false;
       k_mutex_unlock(&spi_a_mutex);

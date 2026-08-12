@@ -61,6 +61,21 @@ Key pieces:
 - `init_spi_a_bus()` — idempotent bring-up (nrfx init + IRQ). Safe to call from both `afe/ads_spi_hw.c`'s `init_spi()` and `wifi_sd_shield/wifi_sd_shield_inits.c`'s `wifi_sd_shield_cs_init()`, in either order.
 - `spi_a_begin_transfer(owner, cs)` — since nrfx allows only **one** registered completion handler per peripheral instance, this records which consumer (`SPI_A_OWNER_ADS` / `SPI_A_OWNER_WIFI_SD`) issued the in-flight transfer, so the single shared interrupt handler can route completion to the right place (`ads_spim_transfer_complete()` or `wifi_sd_spim_transfer_complete()`).
 - `spi_a_mutex` — serializes bus access across consumers. The ADS driver releases it immediately after kicking off its async transfer (matching its existing, hardware-validated timing); the WiFi/SD path holds it through completion (it already blocks on a semaphore).
+- `spi_a_set_frequency(frequency_hz)` — reconfigures SPI_A's SCLK on the fly (nrfx has no lighter-weight way to change frequency than a brief uninit/reinit). Takes `spi_a_mutex` itself; safe to call while already holding it (Zephyr's `k_mutex` is reentrant for the owning thread).
+
+### 4.1 Clock frequency limits
+
+nrfx SPIM only supports a fixed set of discrete frequencies (125 kHz, 250 kHz, 500 kHz, 1, 2, 4, 8, 16, 32 MHz on SPI_A's fast instance) — anything else (e.g. 6 MHz) is rejected by `nrfx_spim_init()` with `NRFX_ERROR_INVALID_PARAM` (`0x0BAD0004`), not silently rounded.
+
+Three named rates are defined in `spi_a.h`, used for different phases/consumers:
+
+| Constant | Value | Used for | Why |
+|---|---|---|---|
+| `SPI_A_ADS_CMD_SAFE_FREQ_HZ` | 4 MHz | ADS1298 command bytes (RESET/SDATAC/RREG/WREG) during `ads_check_id()`/`ads_init()` | The ADS1298 needs `tSDECODE` (4 `tCLK` periods) to internally decode each command byte; a burst DMA transfer faster than that can outrun the decoder. Only matters for command bytes, not data reads. |
+| `SPI_A_ADS_STREAMING_FREQ_HZ` | 8 MHz | Steady-state ADS1298 data reads (`ads1298_read_samples()`, RDATAC mode) | `tSDECODE` doesn't apply here (no command decode, just a shift-register read), but the ADS1298's own `tSCLK` spec still does: max ~15 MHz if `DVDD` is in its 1.65–2 V range (66.6 ns min period) vs 20 MHz at 2.7–3.6 V (50 ns min). Empirically, 16 MHz breaks ID checks/reads on this hardware, consistent with the lower-DVDD ceiling — and since nrfx has no step between 8 and 16 MHz, 8 MHz is the practical maximum on the ADS side unless that DVDD assumption turns out to be wrong. |
+| `SPI_A_ESP_STREAMING_FREQ_HZ` | 16 MHz (starting point, unvalidated) | WiFi/SD (ESP32-C6) transfers via `spi_master_transceive()` | The ESP side has none of the ADS1298's command-decode or `tSCLK` constraints, so this can be tuned independently. nrfx's own ceiling on SPI_A (32 MHz) is the real limit here, **not 40 MHz** — the ESP32-C6/level-translator side hasn't been validated at any rate above 4 MHz yet, so treat this as a value to test, not a proven-safe one. |
+
+`eeg_appl.c`/`emg_appl.c`'s `*_start_streaming()` switch to `SPI_A_ADS_CMD_SAFE_FREQ_HZ` before the one-time ID-check/init command sequence and back to `SPI_A_ADS_STREAMING_FREQ_HZ` right after (on every exit path, including failures), so the bus never gets stuck at the slow rate. If `SPI_A_ADS_STREAMING_FREQ_HZ` and `SPI_A_ESP_STREAMING_FREQ_HZ` differ, `spi_master_transceive()` switches to the ESP rate for the duration of each transfer and back afterward; if they're equal, that switching code isn't even compiled in (`#if`-gated), so there's no cost to leaving them distinct until the ESP rate is actually validated.
 
 `SPI_B` (SPIM2, SCK=P1.07/MOSI=P0.30/MISO=P0.29) is a separate bus reserved for the WULPUS shield (MSP430 bridge) and is owned directly by `sensors/wulpus/wulpus_appl.c`.
 

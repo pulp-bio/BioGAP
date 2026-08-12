@@ -66,27 +66,59 @@
 #define SPI_A_INT_PRIO 1
 
 /*
- * Idle configuration of the bus, i.e. what init_spi_a_bus() sets and what
- * spi_a_restore_default_config() returns to.
+ * Mode the bus is brought up in. Mode 1 (CPOL 0 / CPHA 1) is what the ADS1298
+ * needs. The BGT60TR13C radar speaks mode 0, and switches the bus for the
+ * duration of each of its transactions, restoring whatever configuration it
+ * found (see spi_a_save_config) rather than a fixed idle setting -- the clock
+ * is a variable here, owned by whichever consumer is currently active.
  *
  * CONFIG_MMWAVE_SPI_STATIC_MODE is a bring-up diagnostic: it brings the bus up
- * in the radar's dialect (mode 0) and makes the radar skip its per-transaction
+ * in the radar's dialect and makes the radar skip its per-transaction
  * reconfigure, so the mode switching itself can be ruled in or out as the cause
  * of a non-responsive radar. It breaks the ADS1298, which needs mode 1.
  */
 #if defined(CONFIG_MMWAVE_SPI_STATIC_MODE)
-#define SPI_A_DEFAULT_MODE NRF_SPIM_MODE_0
-#define SPI_A_DEFAULT_FREQ NRF_SPIM_FREQ_8M
-#define SPI_A_DEFAULT_FREQ_HZ NRFX_MHZ_TO_HZ(CONFIG_MMWAVE_SPI_FREQ_MHZ)
+#define SPI_A_INIT_MODE NRF_SPIM_MODE_0
+/** @brief SCLK frequency for init_spi_a_bus()'s initial bring-up */
+#define SPI_A_INIT_FREQ NRFX_MHZ_TO_HZ(CONFIG_MMWAVE_SPI_FREQ_MHZ)
 #else
-/** @brief SPI mode the bus is left in when no owner has reconfigured it
- *  (Mode 1 = CPOL 0 / CPHA 1, required by the ADS1298) */
-#define SPI_A_DEFAULT_MODE NRF_SPIM_MODE_1
-
-/** @brief SPI clock the bus is left in when no owner has reconfigured it */
-#define SPI_A_DEFAULT_FREQ NRF_SPIM_FREQ_4M
-#define SPI_A_DEFAULT_FREQ_HZ NRFX_MHZ_TO_HZ(4)
+#define SPI_A_INIT_MODE NRF_SPIM_MODE_1
+/** @brief SCLK frequency for init_spi_a_bus()'s initial bring-up */
+#define SPI_A_INIT_FREQ NRFX_MHZ_TO_HZ(2)
 #endif
+
+/**
+ * @brief SCLK frequency safe for ADS1298 command decode
+ *
+ * The ADS1298 needs 4 tCLK periods (tSDECODE) to internally decode each
+ * command byte (RESET, SDATAC, RREG, WREG, ...); sending a multi-byte
+ * command faster than that -- as a single burst DMA transfer does -- can
+ * outrun the decoder. Only applies to actual command bytes, not to reading
+ * already-converted samples in RDATAC mode (see SPI_A_ADS_STREAMING_FREQ_HZ).
+ */
+#define SPI_A_ADS_CMD_SAFE_FREQ_HZ NRFX_MHZ_TO_HZ(4)
+
+/**
+ * @brief SCLK frequency for steady-state ADS1298 data streaming
+ *
+ * SPI rate when reading data from the ADS1298.
+ * Safe once the ADS1298 is in RDATAC mode
+ * Maxmimum value is 8 Mhz (theoretical 15 MHz, but NRF supports only 8 or 16 MHz)
+ */
+#define SPI_A_ADS_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(8)
+
+/**
+ * @brief SCLK frequency for WiFi/SD (ESP32-C6) transfers
+ *
+ * The ESP side (as slave) can handle 40 MHz
+ *
+ * If this differs from SPI_A_ADS_STREAMING_FREQ_HZ, spi_master_transceive()
+ * (wifi_sd_spi_functions.c) switches SPI_A to this rate for the duration of
+ * each ESP transfer and back afterward; if they're equal, it skips both
+ * switches. That's a plain runtime check, not #if -- NRFX_MHZ_TO_HZ()'s
+ * expansion isn't guaranteed valid in a preprocessor constant expression.
+ */
+#define SPI_A_ESP_STREAMING_FREQ_HZ NRFX_MHZ_TO_HZ(32)
 
 /** @brief nrfx SPIM driver instance shared by every device on SPI_A */
 extern nrfx_spim_t spi_a_inst;
@@ -95,16 +127,9 @@ extern nrfx_spim_t spi_a_inst;
  * @brief Serializes access to SPI_A across all consumers (ADS, WiFi/SD, ...)
  *
  * @note The ADS1298 driver releases this mutex right after kicking off an
- * async nrfx_spim_xfer() (matching its pre-existing, hardware-validated
- * timing), rather than holding it until the transfer completes. This
- * leaves a narrow theoretical window where another consumer could start a
- * transfer before the ADS one physically finishes. In practice ADS
- * transfers are a few dozen bytes at 4 MHz (tens of microseconds), so the
- * window is small, but it is not zero -- treat concurrent ADS + WiFi/SD
- * traffic as a known follow-up to validate on hardware, or to close by
- * having ADS hold the mutex until completion too (would require moving
- * its irq_lock()/busy-wait handling around, since Zephyr mutexes cannot be
- * released from ISR context).
+ * async nrfx_spim_xfer(), rather than holding it until the transfer completes. 
+ * This leaves a window where another consumer (ESP) could start a
+ * transfer before the ADS one physically finishes. 
  */
 extern struct k_mutex spi_a_mutex;
 
@@ -150,44 +175,93 @@ int init_spi_a_bus(void);
 void spi_a_begin_transfer(spi_a_owner_t owner, const struct gpio_dt_spec *cs);
 
 /**
- * @brief Switch the bus mode and clock for the current owner
+ * @brief Returns the current owner of SPI_A, or SPI_A_OWNER_NONE if idle
  *
- * Devices on SPI_A do not all speak the same SPI dialect: the ADS1298 needs
- * Mode 1 at 4 MHz, the BGT60TR13C radar needs Mode 0 and runs faster. Only
- * the CONFIG and FREQUENCY registers are rewritten, so pin assignment, DMA
- * and interrupt setup from init_spi_a_bus() stay intact.
- *
- * Must be called with spi_a_mutex held and no transfer in flight. An owner
- * that changes the configuration is responsible for calling
- * spi_a_restore_default_config() before releasing the mutex, so that owners
- * which never touch the configuration (the ADS1298 driver) keep seeing the
- * bus exactly as init_spi_a_bus() left it.
- *
- * @param mode      SPI mode to switch to
- * @param frequency SPI clock to switch to
+ * Lets a consumer holding spi_a_mutex confirm no other consumer's transfer
+ * is still physically in flight before starting its own -- see
+ * spi_a_mutex's doc comment for why the mutex alone isn't sufficient.
  */
-void spi_a_reconfigure(nrf_spim_mode_t mode, nrf_spim_frequency_t frequency);
+spi_a_owner_t spi_a_current_owner(void);
 
 /**
  * @brief Report whether a transfer is still in flight on the bus
  *
- * True between spi_a_begin_transfer() and the completion event. Because the
- * ADS1298 driver releases spi_a_mutex as soon as it has kicked off its async
- * transfer (see the note on spi_a_mutex), holding the mutex is not by itself
- * proof that the bus is idle. A consumer that rewrites the peripheral's
- * configuration -- rather than only pushing data -- must wait for this to go
- * false first, or it would corrupt the transfer still running.
+ * Convenience predicate over spi_a_current_owner() for consumers that only
+ * need to know whether the bus is busy, not who has it. True between
+ * spi_a_begin_transfer() and the completion event. Because the ADS1298 driver
+ * releases spi_a_mutex as soon as it has kicked off its async transfer,
+ * holding the mutex is not by itself proof that the bus is idle: a consumer
+ * that rewrites the peripheral's configuration -- rather than only pushing
+ * data -- must wait for this to go false first, or it would corrupt the
+ * transfer still running.
  *
  * @return true if a transfer is in progress, false if the bus is idle
  */
 bool spi_a_transfer_in_flight(void);
 
 /**
- * @brief Restore the bus to SPI_A_DEFAULT_MODE / SPI_A_DEFAULT_FREQ
+ * @brief Reconfigure SPI_A's CLK frequency
  *
- * Counterpart to spi_a_reconfigure(); see its documentation. Must be called
- * with spi_a_mutex held and no transfer in flight.
+ * Briefly tears down and reinitializes the SPIM peripheral with the same
+ * pin/mode config but a new frequency.
+ *
+ * Heavier than spi_a_reconfigure() -- prefer this when changing the clock for
+ * a whole acquisition phase (ADS command vs streaming, ESP transfers), and
+ * spi_a_reconfigure() when switching dialect for a single transaction.
+ *
+ * @param frequency_hz Desired CLK frequency in Hz -- must be one of the
+ *  discrete values nrfx_spim supports (e.g. SPI_A_ADS_CMD_SAFE_FREQ_HZ,
+ *  SPI_A_ADS_STREAMING_FREQ_HZ, SPI_A_ESP_STREAMING_FREQ_HZ); arbitrary
+ *  values are rejected by nrfx_spim_init() with NRFX_ERROR_INVALID_PARAM.
+ * @return 0 on success, -1 on nrfx re-init failure
  */
-void spi_a_restore_default_config(void);
+int spi_a_set_frequency(uint32_t frequency_hz);
+
+/** @brief Saved CONFIG/FREQUENCY register pair, for save/restore around a
+ *  transaction that needs a different SPI dialect. Opaque: treat only as
+ *  something to hand back to spi_a_restore_config(). */
+typedef struct {
+  uint32_t config;
+  uint32_t frequency;
+} spi_a_config_t;
+
+/**
+ * @brief Capture the bus's current mode and clock
+ *
+ * Counterpart to spi_a_restore_config(). Consumers that switch dialect for a
+ * single transaction must put back what they found rather than any fixed idle
+ * setting: the clock is owned by whichever consumer is active (the ADS1298
+ * runs at 4 or 8 MHz depending on phase, the ESP32 at 32 MHz), so restoring a
+ * compile-time constant would silently reclock somebody else's session.
+ *
+ * Must be called with spi_a_mutex held and no transfer in flight.
+ */
+void spi_a_save_config(spi_a_config_t *out);
+
+/**
+ * @brief Put back a configuration captured by spi_a_save_config()
+ *
+ * Must be called with spi_a_mutex held and no transfer in flight.
+ */
+void spi_a_restore_config(const spi_a_config_t *cfg);
+
+/**
+ * @brief Switch the bus mode and clock for the current owner
+ *
+ * Devices on SPI_A do not all speak the same SPI dialect: the ADS1298 needs
+ * Mode 1, the BGT60TR13C radar needs Mode 0 and runs faster. Only the CONFIG
+ * and FREQUENCY registers are rewritten, so pin assignment, DMA and interrupt
+ * setup from init_spi_a_bus() stay intact -- which is what makes this cheap
+ * enough to do per transaction.
+ *
+ * Must be called with spi_a_mutex held and no transfer in flight. An owner
+ * that changes the configuration is responsible for restoring the one it
+ * captured with spi_a_save_config() before releasing the mutex, so that owners
+ * which never touch the configuration keep seeing the bus as they left it.
+ *
+ * @param mode      SPI mode to switch to
+ * @param frequency SPI clock to switch to
+ */
+void spi_a_reconfigure(nrf_spim_mode_t mode, nrf_spim_frequency_t frequency);
 
 #endif // SPI_A_H

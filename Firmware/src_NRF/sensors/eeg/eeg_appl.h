@@ -152,7 +152,7 @@ int eeg_init(void);
  * @return -EALREADY if already streaming
  * @return -EBUSY if not in idle state
  */
-int eeg_start_streaming(void);
+int eeg_start_streaming(uint8_t *ads_config);
 
 /**
  * @brief Stop EEG streaming

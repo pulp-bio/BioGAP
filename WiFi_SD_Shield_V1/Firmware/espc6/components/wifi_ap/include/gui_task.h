@@ -31,13 +31,27 @@
 
 #include "softap_main.h"
 #include "biogap.h"
+#include "common.h"
 
-#define RX_FROM_GUI_BUF_SIZE 20
+/* Matches SPI_FROM_BIOGAP_MAX_SIZE so a GUI command of any length up to a
+ * full SPI transaction can be received and relayed in one shot -- config
+ * commands (ADS settings, WULPUS conf) are multi-byte, not just opcodes. */
+#define RX_FROM_GUI_BUF_SIZE SPI_FROM_BIOGAP_MAX_SIZE
+
+/* Sent by the GUI as its own dedicated one-byte packet once the whole
+ * config+start sequence (ADS settings, WULPUS settings, start opcode, ...)
+ * has been sent. Pure wire-level framing, like ESP_SPI_HEADER/TAILER -- the
+ * ESP doesn't interpret any of the sequence, it just watches for this
+ * marker to know when to relay everything accumulated so far in one control
+ * frame. See parse_gui_command() (gui_utils.c). */
+#define GUI_CONFIG_END_MARKER 0xEE
 
 
 /**  @brief  Buffer to store incoming commands from the GUI*/
-extern uint8_t rx_data_from_gui[RX_FROM_GUI_BUF_SIZE]; 
+extern uint8_t rx_data_from_gui[RX_FROM_GUI_BUF_SIZE];
 extern uint8_t rx_gui_data_to_fwd[RX_FROM_GUI_BUF_SIZE];
+/** @brief Number of valid bytes currently in rx_gui_data_to_fwd. */
+extern size_t rx_gui_data_len;
 
 /** @brief Binds to the GUI socket */
 esp_err_t bind_to_gui();
