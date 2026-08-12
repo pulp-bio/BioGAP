@@ -241,6 +241,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     memcpy(ads_config, data + 1, 5);
     LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
 
+    // Check if we have extra data (relevant for the comined EEG-US streaming)
+
+    if(size > 6) {
+      LOG_INF("Received extra data for EEG streaming: %d bytes", size - 6);
+      uint8_t *extra_data = data + 6;
+      // Call recursively the function to handle the extra data as a new command
+      handle_connectivity_command(extra_data, size - 6);
+    }
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset BLE packet counters for new session */
   #else
@@ -255,6 +263,12 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   case STOP_EEG_STREAMING:
     LOG_INF("Ping STOP_EEG_STREAMING");
     eeg_stop_streaming();
+    if(size > 1) {
+      LOG_INF("Received extra data for STOP_EEG_STREAMING: %d bytes", size - 1);
+      uint8_t *extra_data = data + 1;
+      // Call recursively the function to handle the extra data as a new command
+      handle_connectivity_command(extra_data, size - 1);
+    }
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
@@ -268,6 +282,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     memcpy(ads_config, data + 1, 5);
     LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
 
+    // Check if we have extra data (relevant for the comined EMG-US streaming)
+
+    if(size > 6) {
+      LOG_INF("Received extra data for EMG streaming: %d bytes", size - 6);
+      uint8_t *extra_data = data + 6;
+      // Call recursively the function to handle the extra data as a new command
+      handle_connectivity_command(extra_data, size - 6);
+    }
   #ifndef CONFIG_WI_FI
     ble_reset_packet_counters(); /* Reset packet counters for new session */
   #else
@@ -283,6 +305,12 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
   case STOP_EMG_STREAMING:
     LOG_INF("Ping STOP_EMG_STREAMING");
     emg_stop_streaming();
+    if(size > 1) {
+      LOG_INF("Received extra data for STOP_EMG_STREAMING: %d bytes", size - 1);
+      uint8_t *extra_data = data + 1;
+      // Call recursively the function to handle the extra data as a new command
+      handle_connectivity_command(extra_data, size - 1);
+    }
   #ifndef CONFIG_WI_FI
     ble_print_packet_stats(); /* Print BLE packet stats */
   #else
@@ -367,7 +395,12 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
       #else
         // BLE streaming -- packet can be fragmented; the conf package
         // arrives later as its own separate dispatch, via default: below.
-        wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
+        //wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
+        LOG_INF("WULPUS config package received, forwarding to wulpus_set_msp_config");
+        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
+        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
+
+
       #endif
 
       wulpus_restart_rcv = true; // Set the flag to indicate that a restart command has been received
@@ -397,6 +430,9 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case START_EEG_MIC_STREAMING:
     LOG_DBG("Ping START_EEG_MIC_STREAMING");
+    // the other bytes are the ads configuration
+    memcpy(ads_config, data + 1, 5);
+    LOG_INF("Received ADS configuration: 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X", ads_config[0], ads_config[1], ads_config[2], ads_config[3], ads_config[4]);
     #ifndef CONFIG_WI_FI
       ble_reset_packet_counters(); /* Reset packet counters for new session */
     #else
