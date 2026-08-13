@@ -672,6 +672,18 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
         m_tx_write_pos += copy_len;
     }
 
+    /* A BLE-fragmented package (e.g. a 105-byte MSP_RESTART_PCK_LEN package
+     * split across two ~64-byte NUS writes) reaches here once per fragment.
+     * Signalling the MSP430 on a partial fragment would expose it to a
+     * still-incomplete/stale m_tx_buf before the rest of the package
+     * arrives, so wait for a complete package before doing anything the
+     * MSP430 can observe. */
+    if (m_tx_write_pos < MSP_RESTART_PCK_LEN) {
+        LOG_INF("WULPUS config fragment (%u bytes, tx_buf filled %u/%u) – awaiting rest of package",
+                (unsigned)len, (unsigned)m_tx_write_pos, (unsigned)MSP_RESTART_PCK_LEN);
+        return;
+    }
+
     /* Reset ring buffer */
     buffer_counter = 0;
     current_buffer = 0;
@@ -683,8 +695,8 @@ void wulpus_set_msp_config(const uint8_t *config, uint16_t len)
     /* Assert HOST_LINK_RDY → MSP430 will start sending US frames */
     gpio_pin_set_dt(&host_link_rdy, 1);
 
-    LOG_INF("WULPUS config fragment (%u bytes, tx_buf filled %u/%u) – HOST_LINK_RDY HIGH",
-            (unsigned)len, (unsigned)m_tx_write_pos, (unsigned)WULPUS_BYTES_PER_XFER);
+    LOG_INF("WULPUS config package complete (tx_buf filled %u/%u) – HOST_LINK_RDY HIGH",
+            (unsigned)m_tx_write_pos, (unsigned)WULPUS_BYTES_PER_XFER);
 }
 
 void wulpus_stop(void)

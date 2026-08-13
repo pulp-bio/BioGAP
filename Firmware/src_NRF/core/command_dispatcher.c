@@ -393,14 +393,14 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
         wulpus_cfg_sent = true; // Set the flag to indicate that the WULPUS config has been sent to the MSP430
 
       #else
-        // BLE streaming -- packet can be fragmented; the conf package
-        // arrives later as its own separate dispatch, via default: below.
-        //wulpus_set_msp_config(size > 1 ? data + 1 : NULL, size > 1 ? size - 1 : 0);
-        LOG_INF("WULPUS config package received, forwarding to wulpus_set_msp_config");
-        wulpus_set_msp_config(&data[1], MSP_RESTART_PCK_LEN);
-        wulpus_set_msp_config(&data[1 + MSP_RESTART_PCK_LEN], MSP_RESTART_PCK_LEN);
-
-
+        // BLE streaming -- this message is the 1-byte opcode alone; the real
+        // restart/conf packages arrive later as their own separate messages,
+        // forwarded to wulpus_set_msp_config via default: below once
+        // wulpus_restart_rcv is set. Calling wulpus_set_msp_config here too
+        // used to read past this message into stale bytes left over from
+        // whatever BLE write preceded it, which armed HOST_LINK_RDY on
+        // garbage on every restart after the first.
+        LOG_INF("WULPUS start received; awaiting restart/conf packages");
       #endif
 
       wulpus_restart_rcv = true; // Set the flag to indicate that a restart command has been received
@@ -411,7 +411,16 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
     #if defined(CONFIG_SENSOR_WULPUS)
       LOG_INF("Ping STOP_WULPUS_STREAMING");
       wulpus_stop();
-      wulpus_restart_rcv = false;
+      /* Do NOT clear wulpus_restart_rcv here: the host's stop sequence sends
+       * a trailing restart package (BLE-fragmented, arriving via default:
+       * below) right after this command, meant as the MSP430's stop/reset
+       * signal. Clearing the flag immediately made default: silently drop
+       * that package every single time (confirmed via logs -- no "forwarding
+       * to wulpus_set_msp_config" ever printed for it), so the MSP430 never
+       * got told to reset at stop. Leaving the flag set means default: still
+       * forwards it; it only matters again on the next START_WULPUS_STREAMING,
+       * which re-sets it to true anyway.
+       */
       #if defined(CONFIG_WI_FI)
         nrf_esp_comm_state = NRF_ESP_IDLE; // Reset state to idle to block sending data to ESP
       #endif
@@ -425,7 +434,7 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
 
   case STOP_MIC_STREAMING:
     LOG_INF("Ping STOP_MIC_STREAMING");
-    mic_stop_streaming();
+    mic_stop_streaming(); 
     break;
 
   case START_EEG_MIC_STREAMING:
