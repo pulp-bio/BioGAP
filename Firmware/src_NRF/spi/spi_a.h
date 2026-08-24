@@ -148,6 +148,69 @@ typedef enum {
 } spi_a_owner_t;
 
 /**
+ * @brief Diagnostic-only step markers for the current SPI_A transaction
+ *
+ * Purely informational -- exists only so the periodic status heartbeat
+ * (wifi_sd_shield_appl.c) can show exactly which step was last reached
+ * before a stall, since spi_a_current_owner() alone only says who has the
+ * bus, not what they're doing with it.
+ *
+ * Tracked as TWO independent variables, one per subsystem (see
+ * spi_a_set_ads_checkpoint()/spi_a_set_wifi_checkpoint() below) -- a single
+ * shared variable would have whichever side runs more often (ADS reads fire
+ * far more frequently than WiFi sends) constantly overwrite the other,
+ * making "last value before a freeze" ambiguous as to which side actually
+ * froze. Two variables let the heartbeat show both at once.
+ */
+typedef enum {
+  SPI_A_CP_NONE = 0,
+
+  /* ads_spi_comm.c (ads1298_read_spi / ads1298_read_samples / ads1298_write_spi) */
+  SPI_A_CP_ADS_WAIT_MUTEX = 1,
+  SPI_A_CP_ADS_GOT_MUTEX = 2,
+  SPI_A_CP_ADS_IRQ_LOCKED = 3,
+  SPI_A_CP_ADS_CS_SELECTED = 4,
+  SPI_A_CP_ADS_XFER_STARTED = 5,
+  SPI_A_CP_ADS_IRQ_UNLOCKED = 6,
+  SPI_A_CP_ADS_DONE = 7,
+
+  /* wifi_sd_spi_functions.c (spi_master_transceive) */
+  SPI_A_CP_WIFI_WAIT_MUTEX = 10,
+  SPI_A_CP_WIFI_GOT_MUTEX = 11,
+  SPI_A_CP_WIFI_WAIT_ADS_OWNER = 12,
+  SPI_A_CP_WIFI_DRAINING_SEM = 13,
+  SPI_A_CP_WIFI_FREQ_UP = 14,
+  SPI_A_CP_WIFI_XFER_STARTED = 15,
+  SPI_A_CP_WIFI_WAIT_COMPLETION = 16,
+  SPI_A_CP_WIFI_FREQ_DOWN = 17,
+  SPI_A_CP_WIFI_DONE = 18,
+
+  /* ads_spi_hw.c / ads_spi_data.c -- the SPI completion INTERRUPT handler
+   * (ads_spim_transfer_complete() -> ads_spim_handler_done()), fired once
+   * the DMA transfer kicked off at SPI_A_CP_ADS_XFER_STARTED actually
+   * finishes. Runs in ISR context, not the calling thread -- this is the
+   * gap that let the ISR-context queue-overflow halt hide from the
+   * thread-side checkpoints above (they stayed frozen at ADS_DONE with no
+   * visibility into what happened after). */
+  SPI_A_CP_ADS_ISR_ENTERED = 20,
+  SPI_A_CP_ADS_ISR_CS_DEASSERTED = 21,
+  SPI_A_CP_ADS_ISR_HANDING_TO_ESP = 22,
+  SPI_A_CP_ADS_ISR_DONE = 23,
+} spi_a_checkpoint_t;
+
+/** @brief Record the current step of an ADS-side SPI_A transaction (diagnostic only) */
+void spi_a_set_ads_checkpoint(uint8_t cp);
+
+/** @brief Read back the last-recorded ADS-side step (diagnostic only) */
+uint8_t spi_a_get_ads_checkpoint(void);
+
+/** @brief Record the current step of a WiFi-side SPI_A transaction (diagnostic only) */
+void spi_a_set_wifi_checkpoint(uint8_t cp);
+
+/** @brief Read back the last-recorded WiFi-side step (diagnostic only) */
+uint8_t spi_a_get_wifi_checkpoint(void);
+
+/**
  * @brief Bring up the shared SPI_A (SPIM4) peripheral
  *
  * Configures SPI Mode 1 (CPOL=0, CPHA=1), 4 MHz, MSB first, with no

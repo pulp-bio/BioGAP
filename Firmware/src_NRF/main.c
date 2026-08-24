@@ -91,8 +91,50 @@ struct uart_data_t {
   uint16_t len;
 };
 
+/**
+ * @brief Log one thread's name and remaining stack headroom
+ *
+ * k_thread_foreach() callback (CONFIG_THREAD_MONITOR). Reads the thread's
+ * own stack-object metadata, not the CPU's exception frame -- still
+ * reliable even when the fault dump's own registers/PC came back as
+ * garbage ("context area not valid").
+ */
+static void log_thread_stack_usage(const struct k_thread *thread, void *user_data) {
+  ARG_UNUSED(user_data);
+  size_t unused = 0;
+  int ret = k_thread_stack_space_get(thread, &unused);
+  const char *name = k_thread_name_get((k_tid_t)thread);
+  if (ret == 0) {
+    LOG_ERR("  thread %p (%s): %u bytes unused stack", (const void *)thread,
+            name ? name : "?", (unsigned int)unused);
+  } else {
+    LOG_ERR("  thread %p (%s): stack space unknown (err %d)", (const void *)thread,
+            name ? name : "?", ret);
+  }
+}
+
 void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
-  LOG_INF("Fatal error occurred: %d", reason);
+  ARG_UNUSED(esf);
+  LOG_ERR("=== FATAL ERROR, reason=%u -- see <zephyr/fatal_types.h> K_ERR_* for what this "
+          "number means (e.g. CPU exception, stack overflow, kernel panic/oops) ===", reason);
+  /* The CPU exception frame's own registers/PC are not trustworthy on a
+   * real stack overflow (Zephyr's own dump says "context area not valid"),
+   * so instead of relying on that, walk every thread and report each one's
+   * remaining stack headroom -- this reads each thread's separate stack
+   * bookkeeping, unaffected by which thread's own stack got corrupted. */
+  LOG_ERR("Per-thread stack headroom at time of fault:");
+  k_thread_foreach(log_thread_stack_usage, NULL);
+  /* Deferred logging (the default) queues formatted messages for a separate
+   * logging thread to physically write out later -- but we're about to spin
+   * forever below, so that thread will never run again and every message
+   * above (and anything still queued from before the fault) would be lost
+   * silently. log_panic() forces every pending message out synchronously,
+   * right now, before we halt. Without this, a real crash here looked
+   * identical to every other silent freeze investigated in this session --
+   * including one where a heartbeat log line got cut off mid-print, which
+   * is consistent with a fault landing exactly while that message was still
+   * being transmitted. */
+  log_panic();
   while (1) {
     // Halt here for debugging
   }

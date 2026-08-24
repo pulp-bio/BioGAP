@@ -367,6 +367,13 @@ void rx_from_gui(void *pvParameters)
         }
 
         else{
+            // Debug: confirms whether raw bytes from the GUI are landing on
+            // this socket at all, independent of whether parse_gui_command()
+            // recognizes them -- the existing logs downstream of this point
+            // stay silent for every partial/unrecognized chunk.
+            ESP_LOGI(GUI_TAG, "rx_from_gui: recv %d bytes, first byte 0x%02X",
+                     bytes_received, gui_rx_buf[0]);
+
             ret = parse_gui_command(&gui_rx_buf, bytes_received);
             if (ret != ESP_OK) {
                 ESP_LOGW(GUI_TAG, "Failed to parse GUI command");

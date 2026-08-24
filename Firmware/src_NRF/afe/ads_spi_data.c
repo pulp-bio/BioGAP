@@ -46,6 +46,7 @@
 #include "ads_spi_comm.h"
 #if defined(CONFIG_WI_FI)
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#include "spi/spi_a.h"
 #endif
 
 /* Inter-board synchronization */
@@ -264,6 +265,7 @@ void ads_spim_handler_done(void) {
         ble_tx_buf[buf_current_size++] = BLE_PCK_TAILER;
 
 #if defined(CONFIG_WI_FI)
+        spi_a_set_ads_checkpoint(SPI_A_CP_ADS_ISR_HANDING_TO_ESP);
         add_data_to_esp_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
 #else
         add_data_to_send_buffer(ble_tx_buf, EXG_PCK_LNGTH);
@@ -300,6 +302,35 @@ void ads_drdy_callback_b(void) {
   // LOG_INF("ADS B DRDY interrupt");
 }
 
+/* Generous upper bound on a single 27-byte ADS1298 SPI read -- at up to 8 MHz
+ * that's ~27 us, so 500 us is already a ~18x margin. Exists only to turn a
+ * lost SPI completion interrupt (e.g. a transfer corrupted by concurrent
+ * WiFi/ESP bus activity) into a logged, bounded stall instead of a silent
+ * infinite spin. */
+#define ADS_SPI_XFER_TIMEOUT_US 500
+
+/**
+ * @brief Busy-wait for the current ADS SPI transfer's completion interrupt,
+ *        bailing out after ADS_SPI_XFER_TIMEOUT_US instead of spinning
+ *        forever if it never arrives.
+ *
+ * @param which Label for the log message ("A" or "B")
+ * @return true if spi_xfer_done was seen, false if this timed out
+ */
+static bool ads_wait_spi_xfer_done(const char *which) {
+  uint32_t start_cycle = k_cycle_get_32();
+  while (spi_xfer_done == false) {
+    if (k_cyc_to_us_floor32(k_cycle_get_32() - start_cycle) > ADS_SPI_XFER_TIMEOUT_US) {
+      LOG_ERR("ADS1298 %s SPI read timed out after %d us (SPI_A completion interrupt "
+              "never arrived -- likely bus contention with a concurrent WiFi/ESP transfer). "
+              "Continuing; this sample is likely lost/corrupted.",
+              which, ADS_SPI_XFER_TIMEOUT_US);
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * @brief Process ADS1298 data once both DRDYs have fired
  *
@@ -330,8 +361,7 @@ void process_ads_data(void) {
         spi_xfer_done = false;
         ads_to_read = ADS1298_A;
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_A);
-        while (spi_xfer_done == false)
-          ;
+        ads_wait_spi_xfer_done("A");
 
         // Must be set before kicking off B, not after its busy-wait below:
         // B's completion ISR (spi_a.c) reads this flag to decide whether to
@@ -342,8 +372,7 @@ void process_ads_data(void) {
         spi_xfer_done = false;
         ads_to_read = ADS1298_B;
         ads1298_read_samples(ads_rx_buf, 27, ADS1298_B);
-        while (spi_xfer_done == false)
-          ;
+        ads_wait_spi_xfer_done("B");
       }
     }
   }

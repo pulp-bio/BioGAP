@@ -43,6 +43,11 @@ LOG_MODULE_REGISTER(wifi_sd_spi_functions, LOG_LEVEL_INF);
 /* Serialize async SPIM transfers so callers can treat the API as blocking. */
 K_SEM_DEFINE(spi_nrf_esp_transfer_done, 0, 1);
 
+/* Generous upper bound on how long the ADS should ever hold SPI_A's
+ * ownership: its own transfer is 27 bytes, ~27 us at up to 8 MHz, so 500 us
+ * is already a ~18x margin -- see the wait in spi_master_transceive() below. */
+#define SPI_A_OWNER_WAIT_TIMEOUT_US 500
+
 /**
  * @brief SPI_A completion handler for WiFi/SD transfers
  *
@@ -76,18 +81,36 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
         return -EINVAL;
     }
 
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_WAIT_MUTEX);
     k_mutex_lock(&spi_a_mutex, K_FOREVER);
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_GOT_MUTEX);
 
     /* ADS releases spi_a_mutex right after kicking off a transfer, not once
      * it physically completes. nrfx_spim_xfer() below would reprogram the
      * same peripheral's DMA while that transfer is still in flight, so
      * spin here (tens of microseconds, same order as an ADS transfer
      * itself -- no sleep, same idiom as ads_spi_data.c's spi_xfer_done
-     * wait) until spi_a_current_owner() confirms ADS is really done. */
-    while (spi_a_current_owner() == SPI_A_OWNER_ADS)
-        ;
+     * wait) until spi_a_current_owner() confirms ADS is really done.
+     *
+     * current_owner only ever clears from spi_a.c's SPI completion ISR --
+     * if that interrupt is ever lost (e.g. the ADS transfer got corrupted
+     * by bus contention), this would spin forever. Bail out after a
+     * generous timeout and drop this one packet instead of hanging the
+     * whole relay (and, since spi_a_mutex is held here, everyone else
+     * waiting on it) forever. */
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_WAIT_ADS_OWNER);
+    uint32_t owner_wait_start_cycle = k_cycle_get_32();
+    while (spi_a_current_owner() == SPI_A_OWNER_ADS) {
+        if (k_cyc_to_us_floor32(k_cycle_get_32() - owner_wait_start_cycle) > SPI_A_OWNER_WAIT_TIMEOUT_US) {
+            LOG_ERR("Timed out waiting for ADS to release SPI_A (stuck >%d us) - "
+                    "dropping this ESP send instead of hanging", SPI_A_OWNER_WAIT_TIMEOUT_US);
+            k_mutex_unlock(&spi_a_mutex);
+            return -EBUSY;
+        }
+    }
 
     /* Drain any stale completion before starting a new async transfer. */
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_DRAINING_SEM);
     while (k_sem_take(&spi_nrf_esp_transfer_done, K_NO_WAIT) == 0) {
     }
 
@@ -97,6 +120,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
      * instead of at compile time avoids relying on that. The cost of one
      * comparison is negligible next to the reinit it guards. See
      * SPI_A_ESP_STREAMING_FREQ_HZ's doc comment (spi_a.h). */
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_FREQ_UP);
     if (SPI_A_ADS_STREAMING_FREQ_HZ != SPI_A_ESP_STREAMING_FREQ_HZ) {
         spi_a_set_frequency(SPI_A_ESP_STREAMING_FREQ_HZ);
     }
@@ -112,6 +136,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     /* Execute transfer (blocking) */
     spi_a_begin_transfer(SPI_A_OWNER_WIFI_SD, &esp_cs_gpio);
     nrfx_err_t status = nrfx_spim_xfer(&spi_a_inst, &xfer, 0);
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_XFER_STARTED);
     if(!handshake_done){
         LOG_INF("SPI master transceive initiated, waiting for handshake to complete...");
         LOG_INF("SPI master transceive initiated, sent: 0x%02X 0x%02X 0x%02X 0x%02X",
@@ -131,6 +156,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
 
     // Note: 1msec works for ExG packets, but not for US
     // 811 bytes = 6488 bits, at 4 Mbps takes approx 1.6 msec
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_WAIT_COMPLETION);
     if(!handshake_done){
         status = k_sem_take(&spi_nrf_esp_transfer_done, K_MSEC(5000));
     }
@@ -141,6 +167,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
 
     /* Restore the ADS rate now regardless of outcome -- ADS's own next
      * transfer must not run at the ESP rate. */
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_FREQ_DOWN);
     if (SPI_A_ADS_STREAMING_FREQ_HZ != SPI_A_ESP_STREAMING_FREQ_HZ) {
         spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
     }
@@ -157,6 +184,7 @@ int spi_master_transceive(const uint8_t *tx_buf, uint8_t *rx_buf, size_t len)
     }
 
     k_mutex_unlock(&spi_a_mutex);
+    spi_a_set_wifi_checkpoint(SPI_A_CP_WIFI_DONE);
     return 0;
 }
 
@@ -174,6 +202,13 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
     uint8_t spi_rx_buf[send_len];
     memset(spi_rx_buf, 0, send_len);
     int ret = spi_master_transceive(packet->data, spi_rx_buf, send_len);
+    if (ret == -EBUSY) {
+            /* SPI_A stayed stuck on the ADS past the timeout in
+             * spi_master_transceive() -- already logged there. Drop this one
+             * packet rather than halting: unlike a genuine SPI/response
+             * failure below, this is an anticipated transient bus stall. */
+            return ret;
+    }
     if(ret != 0){
             LOG_ERR("SPI transaction failed (ret=%d)", ret);
             LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");

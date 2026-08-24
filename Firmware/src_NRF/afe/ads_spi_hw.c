@@ -283,6 +283,11 @@ uint8_t pr_word[10] = {_RESET, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 bool ads_initialized = false;
 
 void ads_spim_transfer_complete(void) {
+  /* Runs in SPI completion ISR context, dispatched from spi_a_event_handler()
+   * once the DMA transfer kicked off by ads1298_read_samples()/etc actually
+   * finishes -- these are the checkpoints missing from that thread-side code,
+   * which only covers up to "transfer started". */
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_ISR_ENTERED);
   LOG_DBG("ads_spim_transfer_complete called");
 
   if (gpio_pin_set_dt(&gpio_dt_ads1298_a_cs, 0) < 0) { // Set CS pin to disable
@@ -293,8 +298,10 @@ void ads_spim_transfer_complete(void) {
     LOG_ERR("ADS1298 power GPIO set error");
     return;
   }
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_ISR_CS_DEASSERTED);
 
   ads_spim_handler_done();
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_ISR_DONE);
 }
 
 static void cb_ads_a_dr(const struct device *dev, struct gpio_callback *cb, uint32_t pins) {

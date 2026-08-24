@@ -54,6 +54,7 @@
 #include "wifi_sd_shield/wifi_sd_shield_appl.h"
 #include "ble/ble_appl.h"
 #include "bsp/pwr_bsp.h"
+#include "sensors/emg/emg_appl.h"
 
 #include <nrfx_spim.h>
 #include <zephyr/device.h>
@@ -255,6 +256,7 @@ static void wulpus_spi_thread(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
+    k_thread_name_set(NULL, "wulpus_spi");
     LOG_INF("WULPUS SPI thread started");
 
     while (1) {
@@ -393,7 +395,7 @@ static void wulpus_ble_thread(void *a, void *b, void *c)
 
             #if defined(CONFIG_WI_FI)
                 if (wulpus_cfg_sent) {
-                LOG_INF("Sending WULPUS frame %d to ESP", wulpus_frame_counter - 1);
+                //LOG_INF("Sending WULPUS frame %d to ESP", wulpus_frame_counter - 1);
                 add_data_to_esp_send_buffer(ble_packet, WULPUS_BLE_PKT_SIZE);
                 }
             #else
@@ -487,6 +489,7 @@ static void wulpus_esp_thread(void *a, void *b, void *c)
 {
     ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
 
+    k_thread_name_set(NULL, "wulpus_esp");
     LOG_INF("WULPUS ESP thread started");
       
     bool first_chunck = true; 
@@ -534,15 +537,23 @@ static void wulpus_esp_thread(void *a, void *b, void *c)
             esp_packet[WULPUS_ESP_PACKET_SIZE - 1] = WULPUS_FULL_TAILER;
 
 
-            if (wulpus_cfg_sent) {
-                
+            /* EMG's ADS1298 ID-check/init (emg_appl.c, EMG_STATE_STARTING) runs
+             * a one-time command sequence on the shared SPI_A bus. A relay
+             * transaction to the ESP on that same bus while it's in flight can
+             * corrupt it (bus contention -- matches the ADS1298 datasheet's
+             * warning against SPI activity during conversion). Drop WULPUS
+             * frames instead of relaying them for that one short window,
+             * rather than risk corrupting EMG's start-up. */
+            bool emg_starting = (emg_get_state() == EMG_STATE_STARTING);
+            if (wulpus_cfg_sent && !emg_starting) {
+
                 uint8_t tx_id_sent = esp_packet[8];
                 uint16_t wulpus_msp_acq_nr =
                 ((uint16_t)esp_packet[10] << 8) |
                 (uint16_t)esp_packet[9];
 
-                LOG_INF("Sending WULPUS frame %d to ESP, header: 0x%02X, tailer: 0x%02X, acq_nr: %d, tx_id: %d",
-                wulpus_frame_counter - 1, esp_packet[0], esp_packet[WULPUS_ESP_PACKET_SIZE - 1], wulpus_msp_acq_nr, tx_id_sent);
+                //LOG_INF("Sending WULPUS frame %d to ESP, header: 0x%02X, tailer: 0x%02X, acq_nr: %d, tx_id: %d",
+                //                wulpus_frame_counter - 1, esp_packet[0], esp_packet[WULPUS_ESP_PACKET_SIZE - 1], wulpus_msp_acq_nr, tx_id_sent);
                 // commented here to check if the prolem is somwhere else on the chain
                 add_data_to_esp_send_buffer(esp_packet, WULPUS_ESP_PACKET_SIZE);
             }

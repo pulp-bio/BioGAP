@@ -38,6 +38,9 @@
 #include "wifi_sd_shield_inits.h"
 #include "wifi_sd_spi_functions.h"
 #include "core/command_dispatcher.h"
+#include "sensors/emg/emg_appl.h"
+#include "sensors/wulpus/wulpus_appl.h"
+#include "spi/spi_a.h"
 #include <stdbool.h>
 
 LOG_MODULE_REGISTER(wifi_sd_shield, LOG_LEVEL_INF);
@@ -56,6 +59,41 @@ K_MSGQ_DEFINE(esp_send_msgq, sizeof(esp_packet_t), ESP_SEND_QUEUE_SIZE, 4);
 bool handshake_done = false;
 /* Semaphore to synchronize NRF-ESP communication: both sender and receiver wait for handshake to complete */
 K_SEM_DEFINE(handshake_complete_sem, 0, 2);
+
+/*==============================================================================
+ * Diagnostic status heartbeat
+ *
+ * The concurrent EMG+WULPUS-over-WiFi pipeline has several unbounded waits
+ * spread across ads_spi_data.c, wulpus_appl.c and wifi_sd_spi_functions.c;
+ * a stall in any one of them looks identical from the outside (streaming
+ * just stops, nothing logs). Rather than keep guessing which specific wait
+ * is stuck, periodically log every stage's state so whichever value stops
+ * changing right before a stall pinpoints where it happened. Low priority
+ * and a slow period so it never competes for CPU or the bus. */
+/* Was 1024 -- too tight. LOG_INF() here formats 8 arguments into a fairly
+ * long string; at a 2ms period that runs often enough that a real stack
+ * overflow (Zephyr's own fault handler: "USAGE FAULT: Stack overflow
+ * (context area not valid)") showed up during concurrent EMG+WULPUS Wi-Fi
+ * testing. 2048 matches the minimum used by every other thread in this
+ * codebase. */
+#define STATUS_HEARTBEAT_STACK_SIZE 2048
+#define STATUS_HEARTBEAT_PRIORITY   10
+#define STATUS_HEARTBEAT_PERIOD_MS  2
+
+static void status_heartbeat_thread(void *a, void *b, void *c) {
+    ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+    k_thread_name_set(NULL, "heartbeat");
+    while (1) {
+        k_msleep(STATUS_HEARTBEAT_PERIOD_MS);
+        LOG_INF("STATUS: emg_state=%d wulpus_streaming=%d wulpus_cfg_sent=%d "
+                "spi_a_owner=%d ads_cp=%d wifi_cp=%d nrf_esp_comm_state=%d esp_send_msgq=%u/%u",
+                emg_get_state(), wulpus_is_streaming(), wulpus_cfg_sent,
+                spi_a_current_owner(), spi_a_get_ads_checkpoint(), spi_a_get_wifi_checkpoint(),
+                nrf_esp_comm_state, k_msgq_num_used_get(&esp_send_msgq), ESP_SEND_QUEUE_SIZE);
+    }
+}
+K_THREAD_DEFINE(status_heartbeat_tid, STATUS_HEARTBEAT_STACK_SIZE, status_heartbeat_thread,
+                 NULL, NULL, NULL, STATUS_HEARTBEAT_PRIORITY, 0, 0);
 
 /**
  * @brief Process ESP data when DRDY interrupt occurs 
@@ -124,6 +162,7 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3)
     ARG_UNUSED(arg1);
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
+    k_thread_name_set(NULL, "esp_receiver");
     LOG_INF("SPI NRF-ESP receiver thread started, waiting for handshake to complete...");
     k_sem_take(&handshake_complete_sem, K_FOREVER);
     LOG_INF("SPI NRF-ESP receiver took semaphore, starting receiver thread"); 
@@ -160,7 +199,28 @@ void spi_nrf_esp_receiver_thread(void *arg1, void *arg2, void *arg3)
 void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
 
     int ret;
-    esp_packet_t packet;
+    /* esp_packet_t is ~852 bytes -- too big for a stack local here. This
+     * function is called from the ADS SPI-completion ISR (via
+     * ads_spim_handler_done(), for the EMG path) as well as from
+     * wulpus_esp_thread() (normal thread, for WULPUS). ISR context on this
+     * SoC runs on a small stack shared by all nested interrupts, separate
+     * from every application thread's own stack -- an 852-byte local here
+     * was exactly the "USAGE FAULT: stack overflow" seen during concurrent
+     * EMG+WULPUS Wi-Fi streaming (confirmed by elimination: main.c's
+     * per-thread stack dump at fault time showed every application thread
+     * with healthy headroom, which only makes sense if the overflow was on
+     * a stack that dump doesn't even enumerate).
+     *
+     * Static instead of a stack local removes that footprint, but a single
+     * shared static would let an ISR call preempt a thread call mid-write
+     * and corrupt the packet in flight -- so two separate buffers, picked
+     * by k_is_in_isr(), keep the two call paths from ever touching the same
+     * memory. discard_scratch is shared across both since its contents are
+     * immediately thrown away either way. */
+    static esp_packet_t isr_packet_buf;
+    static esp_packet_t thread_packet_buf;
+    static esp_packet_t discard_scratch;
+    esp_packet_t *packet = k_is_in_isr() ? &isr_packet_buf : &thread_packet_buf;
 
     // Validate size
     if (size > ESP_PCKT_MAX_SIZE) {
@@ -168,32 +228,25 @@ void add_data_to_esp_send_buffer(uint8_t *data, uint16_t size) {
         return;
     }
 
-    packet.size = size;
-    memcpy(packet.data, data, size);
+    packet->size = size;
+    memcpy(packet->data, data, size);
     //LOG_INF("Enqueuing packet for ESP sending, size: %d", size);
 
     /* Called from SPI-completion ISR context (via ads_spim_handler_done()),
-     * so this must never block -- K_FOREVER here would stall the ISR
-     * forever once the queue fills, freezing the whole system (nothing else
-     * can run until an ISR returns). If full, drop the oldest queued packet
-     * to make room instead: a stalled sender loses old data rather than
+     * so this must never block -- K_FOREVER, or worse k_sleep(), here would
+     * not just stall a thread: there is no thread to suspend from ISR
+     * context, so it locks up the entire CPU forever (this was the "random
+     * silent freeze, even the heartbeat thread stops" during concurrent
+     * EMG+WULPUS Wi-Fi streaming -- confirmed via the diagnostic checkpoint
+     * staying frozen exactly at "ADS transfer done, about to hand data off",
+     * which is this call). If full, drop the oldest queued packet to make
+     * room and move on: a stalled sender loses old data rather than
      * hanging everything waiting for space. */
-    ret = k_msgq_put(&esp_send_msgq, &packet, K_NO_WAIT);
+    ret = k_msgq_put(&esp_send_msgq, packet, K_NO_WAIT);
     if (ret != 0) {
-        esp_packet_t discard;
-        k_msgq_get(&esp_send_msgq, &discard, K_NO_WAIT);
-        ret = k_msgq_put(&esp_send_msgq, &packet, K_NO_WAIT);
+        k_msgq_get(&esp_send_msgq, &discard_scratch, K_NO_WAIT);
+        ret = k_msgq_put(&esp_send_msgq, packet, K_NO_WAIT);
         LOG_ERR("ESP send queue full, dropped oldest packet");
-        // TODO: this still halts unconditionally right after the drop-oldest
-        // retry above, regardless of whether it succeeded -- the "drop
-        // instead of hanging" behavior the comment above describes doesn't
-        // actually happen yet. Known limitation, follow-up planned.
-        // halt the system
-        LOG_ERR("=== SPI FAILURE in add_data_to_esp_send_buffer - NRF53 HALTED ===");
-        while (1)
-        {
-            k_sleep(K_FOREVER);
-        }
     }
     if (ret != 0) {
         LOG_ERR("Failed to enqueue data for ESP sending (err %d)", ret);
@@ -210,6 +263,7 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
     ARG_UNUSED(arg1);
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
+    k_thread_name_set(NULL, "esp_sender");
     LOG_INF("SPI NRF-ESP sender thread started, waiting for handshake to complete...");
 
     k_sem_take(&handshake_complete_sem, K_FOREVER);
@@ -247,11 +301,16 @@ void spi_nrf_esp_sender_thread(void *arg1, void *arg2, void *arg3)
                 }
                 //LOG_INF("Starting BIOGAP to ESP transaction, size: %d", packet.size);
                 ret = biogap_to_esp_transaction(&packet);
+                if (ret == -EBUSY) {
+                    /* Transient SPI_A bus stall, already logged where it was
+                     * detected -- packet dropped, keep streaming. */
+                    continue;
+                }
                 if (ret != 0) {
                     LOG_ERR("Failed to send packet to ESP32 (err %d)", ret);
-                    // halt 
+                    // halt
                     LOG_ERR("=== SPI FAILURE in spi_nrf_esp_sender_thread - NRF53 HALTED ===");
-                    while (1) 
+                    while (1)
                     {
                         k_sleep(K_FOREVER);
                     }

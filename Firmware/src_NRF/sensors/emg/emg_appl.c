@@ -67,7 +67,14 @@ extern uint16_t counter;
 LOG_MODULE_REGISTER(emg_appl, LOG_LEVEL_INF);
 
 #define EMG_THREAD_STACK_SIZE 2048
-#define EMG_THREAD_PRIORITY 5
+/* Must be strictly higher priority (lower number) than SPI_NRF_ESP_SENDER_PRIORITY
+ * (wifi_sd_shield_appl.c) and WULPUS_ESP_PRIORITY (wulpus_appl.c), both 5 --
+ * otherwise, once WULPUS's dense Wi-Fi relay traffic keeps the shared
+ * esp_send_msgq non-empty, the equal-priority relay-sender thread never
+ * genuinely blocks/yields, and this thread (pending on spi_a_mutex to read
+ * the ADS1298) never gets scheduled at all: EMG produces zero packets for
+ * the whole combined-streaming session, not just delayed/dropped ones. */
+#define EMG_THREAD_PRIORITY 4
 /*==============================================================================
  * Static Variables
  *============================================================================*/
@@ -239,6 +246,7 @@ static void emg_streaming_thread(void *arg1, void *arg2, void *arg3) {
 
   int ret;
 
+  k_thread_name_set(NULL, "emg_stream");
   LOG_INF("EMG streaming thread started");
 
   while (1) {

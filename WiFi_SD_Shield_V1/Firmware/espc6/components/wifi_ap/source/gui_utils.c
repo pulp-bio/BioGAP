@@ -69,29 +69,42 @@ esp_err_t parse_gui_command(uint8_t *buf, size_t len)
      * commands (ADS settings, WULPUS conf, start, ...) all look the same to
      * it. The GUI's whole config+start sequence can span multiple received
      * chunks, so accumulate raw bytes into rx_gui_data_to_fwd across calls
-     * and only relay once GUI_CONFIG_END_MARKER arrives as its own,
-     * dedicated one-byte chunk (sent by the GUI after the full sequence).
-     * This keeps the whole sequence to exactly one control-frame relay
-     * (biogap_send.c's propagate_first_start_command_to_biogap_master())
-     * before streaming begins, so biogap_read.c can safely arm the bulk
-     * pre-queue pool right after that one relay is confirmed delivered,
-     * with nothing else ever competing for the same SPI slave queue slot. */
-    if (len == 1 && buf[0] == GUI_CONFIG_END_MARKER) {
+     * and relay once GUI_CONFIG_END_MARKER is seen. This keeps the whole
+     * sequence to exactly one control-frame relay (biogap_send.c's
+     * propagate_first_start_command_to_biogap_master()) before streaming
+     * begins, so biogap_read.c can safely arm the bulk pre-queue pool right
+     * after that one relay is confirmed delivered, with nothing else ever
+     * competing for the same SPI slave queue slot.
+     *
+     * The marker is detected as the LAST byte of whatever chunk just
+     * arrived, not by requiring it to arrive alone in its own len==1 recv().
+     * TCP is a byte stream with no message boundaries: the sender writing
+     * the marker as its own send() call does not guarantee the receiver's
+     * recv() sees it as a standalone chunk -- confirmed via logs, where the
+     * marker instead arrived coalesced onto the tail of a 217-byte chunk
+     * together with the rest of the sequence. Requiring len==1 silently
+     * dropped every marker that arrived that way, so B_START_CMD_RCV was
+     * never set and the sequence was never relayed. */
+    bool has_marker = (buf[len - 1] == GUI_CONFIG_END_MARKER);
+    size_t payload_len = has_marker ? len - 1 : len;
+
+    if (payload_len > 0) {
+        if (gui_accum_len + payload_len > RX_FROM_GUI_BUF_SIZE - 3) {
+            ESP_LOGE(GUI_TAG, "Accumulated GUI config would exceed %u bytes, dropping sequence",
+                     (unsigned)(RX_FROM_GUI_BUF_SIZE - 3));
+            gui_accum_len = 0;
+            return ESP_ERR_INVALID_SIZE;
+        }
+        memcpy(&rx_gui_data_to_fwd[gui_accum_len], buf, payload_len);
+        gui_accum_len += payload_len;
+    }
+
+    if (has_marker) {
         rx_gui_data_len = gui_accum_len;
         gui_accum_len = 0;
         ESP_LOGI(GUI_TAG, "End of config sequence, relaying %u bytes to NRF", (unsigned)rx_gui_data_len);
         xEventGroupSetBits(g_evt, B_START_CMD_RCV);
-        return ESP_OK;
     }
 
-    if (gui_accum_len + len > RX_FROM_GUI_BUF_SIZE - 3) {
-        ESP_LOGE(GUI_TAG, "Accumulated GUI config would exceed %u bytes, dropping sequence",
-                 (unsigned)(RX_FROM_GUI_BUF_SIZE - 3));
-        gui_accum_len = 0;
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    memcpy(&rx_gui_data_to_fwd[gui_accum_len], buf, len);
-    gui_accum_len += len;
     return ESP_OK;
 }

@@ -128,23 +128,33 @@ static int ads_chip_select(ads_device_id_t ads_id) {
  * @note CS is asserted by this function and deasserted by interrupt handler
  */
 int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
-  unsigned int key = irq_lock(); // Disable all interrupts
+  /* Mutex before irq_lock() -- see ads1298_read_samples()'s comment: taking
+   * the IRQ lock before a blocking kernel API deadlocks the CPU if the
+   * mutex isn't immediately free. */
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_WAIT_MUTEX);
   k_mutex_lock(&spi_a_mutex, K_FOREVER);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_GOT_MUTEX);
+  unsigned int key = irq_lock(); // Disable all interrupts
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_LOCKED);
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(pr_word, size, ads_rx_buf, size);
 
   if (ads_chip_select(ads_id) < 0) {
-    k_mutex_unlock(&spi_a_mutex);
     irq_unlock(key);
+    k_mutex_unlock(&spi_a_mutex);
     return -1;
   }
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_CS_SELECTED);
 
   spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
   nrfx_err_t status;
   status = nrfx_spim_xfer(&spi_a_inst, &spim_xfer_desc, 0);
   NRFX_ASSERT(status == NRFX_SUCCESS);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_XFER_STARTED);
 
-  k_mutex_unlock(&spi_a_mutex);
   irq_unlock(key); // Restore interrupts
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_UNLOCKED);
+  k_mutex_unlock(&spi_a_mutex);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_DONE);
 
   return 0;
 }
@@ -167,23 +177,39 @@ int ads1298_read_spi(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
  * @note empty_buffer contains zeros for dummy TX bytes
  */
 int ads1298_read_samples(uint8_t *data, uint8_t size, ads_device_id_t ads_id) {
-  unsigned int key = irq_lock(); // Disable all interrupts
+  /* Take the mutex FIRST, with interrupts still enabled: if the WiFi/ESP
+   * relay thread currently holds spi_a_mutex, this call needs to block and
+   * let the scheduler switch to it, which itself relies on interrupts
+   * (e.g. the tick). Calling irq_lock() before a blocking kernel API is
+   * exactly what Zephyr's own docs warn against -- it deadlocks the whole
+   * CPU with interrupts permanently masked (this was the "random silent
+   * freeze, even the heartbeat thread stops" bug during concurrent
+   * EMG+WULPUS Wi-Fi streaming). Only the CS-assert + transfer-kickoff
+   * below actually needs interrupts disabled, so do that once the mutex is
+   * already ours. */
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_WAIT_MUTEX);
   k_mutex_lock(&spi_a_mutex, K_FOREVER);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_GOT_MUTEX);
+  unsigned int key = irq_lock();
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_LOCKED);
 
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(empty_buffer, size, ads_rx_buf, size);
   if (ads_chip_select(ads_id) < 0) {
-    k_mutex_unlock(&spi_a_mutex);
     irq_unlock(key);
+    k_mutex_unlock(&spi_a_mutex);
     return -1;
   }
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_CS_SELECTED);
 
   spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
   nrfx_err_t status;
   status = nrfx_spim_xfer(&spi_a_inst, &spim_xfer_desc, 0);
   NRFX_ASSERT(status == NRFX_SUCCESS);
-  k_mutex_unlock(&spi_a_mutex);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_XFER_STARTED);
   irq_unlock(key); // Restore interrupts
-
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_UNLOCKED);
+  k_mutex_unlock(&spi_a_mutex);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_DONE);
   return 0;
 }
 
@@ -207,14 +233,21 @@ int ads1298_write_spi(uint8_t size, ads_device_id_t ads_id) {
   nrfx_spim_xfer_desc_t spim_xfer_desc = NRFX_SPIM_XFER_TRX(pr_word, sizeof(pr_word), ads_rx_buf, sizeof(ads_rx_buf));
   nrfx_err_t status;
 
-  unsigned int key = irq_lock(); // Disable all interrupts
+  /* Mutex before irq_lock() -- see ads1298_read_samples()'s comment: taking
+   * the IRQ lock before a blocking kernel API deadlocks the CPU if the
+   * mutex isn't immediately free. */
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_WAIT_MUTEX);
   k_mutex_lock(&spi_a_mutex, K_FOREVER);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_GOT_MUTEX);
+  unsigned int key = irq_lock(); // Disable all interrupts
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_LOCKED);
 
   if (ads_chip_select(ads_id) < 0) {
-    k_mutex_unlock(&spi_a_mutex);
     irq_unlock(key);
+    k_mutex_unlock(&spi_a_mutex);
     return -1;
   }
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_CS_SELECTED);
 
   LOG_DBG("Starting SPI write transfer");
   spi_a_begin_transfer(SPI_A_OWNER_ADS, NULL); // ADS deasserts its own CS on completion
@@ -223,9 +256,12 @@ int ads1298_write_spi(uint8_t size, ads_device_id_t ads_id) {
   LOG_DBG("SPI write transfer started");
   NRFX_ASSERT(status == NRFX_SUCCESS);
   LOG_DBG("SPI write transfer asserted CS");
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_XFER_STARTED);
 
-  k_mutex_unlock(&spi_a_mutex);
   irq_unlock(key); // Restore interrupts
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_IRQ_UNLOCKED);
+  k_mutex_unlock(&spi_a_mutex);
+  spi_a_set_ads_checkpoint(SPI_A_CP_ADS_DONE);
 
   return 0;
 }

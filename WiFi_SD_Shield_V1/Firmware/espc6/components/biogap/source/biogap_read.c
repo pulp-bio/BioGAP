@@ -478,9 +478,20 @@ void read_from_biogap_task_nrf_master_esp_slave_prequeue(void *pv)
 
                 if(rx_data[0] == WULPUS_HDR_XFER_0 || rx_data[0] == NRF_EXG_HEADER){
                     uint16_t counter = (rx_data[2] << 8) | rx_data[1];
+
                     if(counter != (rx_counter_prev+1)){
                         ESP_LOGW(BIOGAP_READ_TAG, "Missed packet(s): expected counter %d, got %d", rx_counter_prev+1, counter);
                     }
+                    else{
+                        // if(rx_data[0] == NRF_EXG_HEADER){
+                        //     ESP_LOGI(BIOGAP_READ_TAG, "EXG");
+                        // }
+                        if(rx_data[0] == WULPUS_HDR_XFER_0){
+                            ESP_LOGI(BIOGAP_READ_TAG, " WULPUS"); ;
+                        }
+                        //ESP_LOGI(BIOGAP_READ_TAG, "Received packet with expected counter: %d", counter);
+                    }
+                    
                     rx_counter_prev = counter;
                     packet_count++;
                 }

@@ -392,6 +392,24 @@ void handle_connectivity_command(const uint8_t *data, uint16_t size) {
         LOG_INF("WULPUS config package forwarded to wulpus_set_msp_config");
         wulpus_cfg_sent = true; // Set the flag to indicate that the WULPUS config has been sent to the MSP430
 
+        // The ESP's single combined control frame can carry a CHAINED command
+        // after WULPUS's own opcode+restart+conf (e.g. START_EMG_STREAMING +
+        // its 5-byte ADS config, for combined EMG+WULPUS streaming over Wi-Fi).
+        // This handler only consumes the first 1 + 2*MSP_RESTART_PCK_LEN bytes
+        // for WULPUS itself -- anything beyond that in the same frame was
+        // previously silently discarded, so the chained command never ran at
+        // all (confirmed: WULPUS started, EMG never did). Recurse into
+        // whatever follows, mirroring the recursive-dispatch convention
+        // already used elsewhere in this file for START_EEG_STREAMING /
+        // START_EMG_STREAMING's own trailing config bytes.
+        {
+          const uint16_t wulpus_consumed = 1 + 2 * MSP_RESTART_PCK_LEN;
+          if (size > wulpus_consumed) {
+            LOG_INF("Received extra data after WULPUS config: %d bytes", size - wulpus_consumed);
+            handle_connectivity_command(data + wulpus_consumed, size - wulpus_consumed);
+          }
+        }
+
       #else
         // BLE streaming -- this message is the 1-byte opcode alone; the real
         // restart/conf packages arrive later as their own separate messages,

@@ -42,6 +42,32 @@ K_MUTEX_DEFINE(spi_a_mutex);
  *  volatile. */
 static volatile spi_a_owner_t current_owner = SPI_A_OWNER_NONE;
 
+/** @brief Diagnostic-only: which step of a SPI_A transaction is currently in
+ *  progress, tracked separately per subsystem (ads_spi_comm.c/ads_spi_hw.c
+ *  vs wifi_sd_spi_functions.c) since ADS reads happen far more often than
+ *  WiFi sends -- a single shared variable would almost always show a recent
+ *  ADS value regardless of which side actually stalled. Purely
+ *  informational -- read by the periodic status heartbeat
+ *  (wifi_sd_shield_appl.c). See spi_a_checkpoint_t. */
+static volatile uint8_t ads_checkpoint = SPI_A_CP_NONE;
+static volatile uint8_t wifi_checkpoint = SPI_A_CP_NONE;
+
+void spi_a_set_ads_checkpoint(uint8_t cp) {
+  ads_checkpoint = cp;
+}
+
+uint8_t spi_a_get_ads_checkpoint(void) {
+  return ads_checkpoint;
+}
+
+void spi_a_set_wifi_checkpoint(uint8_t cp) {
+  wifi_checkpoint = cp;
+}
+
+uint8_t spi_a_get_wifi_checkpoint(void) {
+  return wifi_checkpoint;
+}
+
 /** @brief CS line to auto-deassert on completion, or NULL if the owner
  *  manages its own CS deassertion */
 static const struct gpio_dt_spec *current_cs = NULL;
