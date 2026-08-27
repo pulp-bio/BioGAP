@@ -177,6 +177,9 @@ int emg_start_streaming(uint8_t *ads_config) {
 
   if (first_run) {
     LOG_INF("Checking ADS1298 device IDs");
+    ads_check_id(ADS1298_B);
+
+
     if (ads_check_id(ADS1298_A) != 0 || ads_check_id(ADS1298_B) != 0) {
       LOG_ERR("ADS1298 ID check failed - powering rails off, EMG start aborted "
               "(check battery voltage / shield)");
