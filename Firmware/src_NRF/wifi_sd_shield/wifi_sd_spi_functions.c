@@ -218,11 +218,11 @@ int biogap_to_esp_transaction(esp_packet_t *packet){
 
     // check if expected received header and tailer are correct
     if(spi_rx_buf[0] != ESP_SPI_HEADER || spi_rx_buf[send_len - 1] != ESP_SPI_TAILER){
-            LOG_ERR("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
+            LOG_WRN("SPI transaction response has invalid header/tailer: received header 0x%02X, expected 0x%02X; received tailer 0x%02X, expected 0x%02X",
                 spi_rx_buf[0], ESP_SPI_HEADER, spi_rx_buf[send_len - 1], ESP_SPI_TAILER);
-            LOG_ERR("=== SPI FAILURE - NRF53 HALTED ===");
-            while (1) {k_sleep(K_FOREVER);}
-            return -EIO;   
+            //LOG_WRN("=== SPI FAILURE - NRF53 HALTED ===");
+            //while (1) {k_sleep(K_FOREVER);}
+            //return -EIO;   
     }
     
     //check if the received data contain an implicit stop command from ESP

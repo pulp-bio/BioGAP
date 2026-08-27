@@ -92,8 +92,11 @@ static void status_heartbeat_thread(void *a, void *b, void *c) {
                 nrf_esp_comm_state, k_msgq_num_used_get(&esp_send_msgq), ESP_SEND_QUEUE_SIZE);
     }
 }
-K_THREAD_DEFINE(status_heartbeat_tid, STATUS_HEARTBEAT_STACK_SIZE, status_heartbeat_thread,
-                 NULL, NULL, NULL, STATUS_HEARTBEAT_PRIORITY, 0, 0);
+
+// Enable this only for logging
+
+//K_THREAD_DEFINE(status_heartbeat_tid, STATUS_HEARTBEAT_STACK_SIZE, status_heartbeat_thread,
+//                 NULL, NULL, NULL, STATUS_HEARTBEAT_PRIORITY, 0, 0);
 
 /**
  * @brief Process ESP data when DRDY interrupt occurs 
