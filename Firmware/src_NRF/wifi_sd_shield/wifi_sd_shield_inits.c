@@ -159,6 +159,14 @@ int wifi_sd_shield_cs_init(void) {
         LOG_ERR("SD-CS GPIO controller not ready!");
         return -1;
     }
+    // High drive both directions: measured only ~1.2V at "active" before this,
+    // barely above the 1.17V VIH minimum (VCCA x 0.65 @ 1.8V) -- too marginal.
+    // ret = gpio_pin_configure_dt(&sd_cs_gpio, GPIO_OUTPUT_ACTIVE | NRF_GPIO_DRIVE_H0H1);
+    // if (ret != 0) {
+    //     LOG_ERR("Failed to configure SD-CS GPIO (%d)", ret);
+    //     return -1;
+    // }
+
     ret = gpio_pin_configure_dt(&sd_cs_gpio, GPIO_OUTPUT_INACTIVE);
     if (ret != 0) {
         LOG_ERR("Failed to configure SD-CS GPIO (%d)", ret);

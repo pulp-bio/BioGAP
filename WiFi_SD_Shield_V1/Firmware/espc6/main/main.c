@@ -78,6 +78,28 @@ void app_main()
     
     
 
+     // Initialize the SEL PIN for IC3.  
+    gpio_config_t io_conf_sdctrl = {0};
+    io_conf_sdctrl.pin_bit_mask = (1ULL << ESP_SDCTRL);
+    io_conf_sdctrl.mode = GPIO_MODE_OUTPUT;
+    io_conf_sdctrl.pull_up_en = GPIO_PULLUP_ENABLE;            // Enable pull-up resistor (in any case this GPIO should pulled up hihg)
+    io_conf_sdctrl.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    gpio_config(&io_conf_sdctrl);
+
+
+    // set the ESP_SDCTRL pin HIGH
+    gpio_set_level(ESP_SDCTRL, 1);
+
+    // Logging policy controlled by compile-time user flag in common.h.
+    #if ESP_ENABLE_INFO_LOGS
+        esp_log_level_set("*", ESP_LOG_INFO);
+        esp_log_level_set("gpio", ESP_LOG_WARN); // Keep GPIO dump lines muted even in INFO mode.
+    #else
+        esp_log_level_set("*", ESP_LOG_WARN);
+    #endif
+
+    ESP_LOGI(MAIN_TAG, "Starting app_main, initializing system...");
+
 #if !ESP_LOCAL_DUMMY_SENSOR
 
     spi_bus_mutex = xSemaphoreCreateMutex();
