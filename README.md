@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="Documentation/system_overview.png" alt="BioGAP-Ultra platform and sensing modules" width="760">
-</p>
 
 # BioGAP-Ultra
 
@@ -9,6 +6,11 @@
 [BioGAP-Ultra](https://doi.org/10.1109/TBCAS.2026.3652501) is an open-source, ultra-low-power platform for synchronized multimodal biosignal acquisition, wireless streaming, and on-device inference. Its stackable architecture combines a compact mainboard with application-specific sensing shields, enabling the same processing platform to be integrated into headbands, armbands, chestbands, and custom wearable devices.
 
 The mainboard pairs a **GAP9** parallel ultra-low-power processor for digital signal processing and neural-network inference with an **nRF5340** for sensor control and Bluetooth Low Energy (BLE) connectivity. Available sensing modules support **EEG, EMG, ECG, PPG, 3-axis acceleration, QVAR, and audio** acquisition.
+
+<p align="center">
+  <img src="Documentation/system_overview.png" alt="BioGAP-Ultra platform and sensing modules" width="760">
+</p>
+
 
 ## Key Features
 
@@ -26,7 +28,7 @@ The mainboard pairs a **GAP9** parallel ultra-low-power processor for digital si
 
 The platform was experimentally validated in three fully wearable form factors. Power values include continuous acquisition and BLE streaming; battery-life estimates use a 150 mAh LiPo battery.
 
-| Form factor | Acquired signals | Streaming power | Estimated battery life |
+| Form factor | Acquired signals | Streaming power | Battery life |
 | --- | --- | ---: | ---: |
 | EEG-PPG headband | 16-channel EEG, PPG, acceleration | 32.8 mW | 16.9 h |
 | EMG sleeve | 16-channel EMG, acceleration | 26.7 mW | 20.8 h |
@@ -110,7 +112,7 @@ For desktop acquisition, visualization, recording, and live inference workflows,
 
 ## Citation
 
-If BioGAP-Ultra contributes to your research, please cite:
+If BioGAP contributes to your research, please cite:
 
 ```bibtex
 @ARTICLE{Frey_2026_BioGAP_Ultra,
@@ -124,6 +126,18 @@ If BioGAP-Ultra contributes to your research, please cite:
   keywords={Electrocardiography; Biomedical monitoring; Monitoring; Electromyography; Electroencephalography; Artificial intelligence; Heart rate; Estimation; Temperature measurement; Hardware; Biopotential; ExG; photoplethysmogram; human-machine interface; sensor fusion},
   doi={10.1109/TBCAS.2026.3652501}
 }
+```
+```bibtex
+@INPROCEEDINGS{Frey_2023_BioGAP,
+  author={Frey, Sebastian and Guermandi, Marco and Benatti, Simone and Kartsch, Victor and Cossettini, Andrea and Benini, Luca},
+  booktitle={2023 IEEE International Conference on Omni-layer Intelligent Systems (COINS)}, 
+  title={BioGAP: a 10-Core FP-capable Ultra-Low Power IoT Processor, with Medical-Grade AFE and BLE Connectivity for Wearable Biosignal Processing}, 
+  year={2023},
+  volume={},
+  number={},
+  pages={1-7},
+  keywords={Wireless communication;6G mobile communication;Wireless sensor networks;Ultrasonic imaging;Wearable computers;Machine learning;Electroencephalography;wearable EEG;wearable healthcare;ultra-low-power design;embedded system},
+  doi={10.1109/COINS57856.2023.10189286}}
 ```
 
 ## Works Using BioGAP
@@ -147,8 +161,9 @@ BioGAP-Ultra was developed at the [Integrated Systems Laboratory (IIS)](https://
 
 - [Sebastian Frey](https://scholar.google.com/citations?user=7jhiqz4AAAAJ&hl=en) - Hardware, firmware, software, and documentation
 - [Victor Kartsch](https://scholar.google.com/citations?user=0LY6szsAAAAJ&hl=en) - Software and conceptualization
-- [Philipp Schilk](https://scholar.google.com/citations?user=2DB8gDwAAAAJ&hl=en&oi=sra) - Firmware
 - [Giusy Spacone](https://scholar.google.com/citations?user=dGE8uMEAAAAJ&hl=en) - Firmware
+- [Giovanni Pollo](https://scholar.google.com/citations?user=znSV3doAAAAJ&hl=en&oi=ao) - Firmware
+- [Philipp Schilk](https://scholar.google.com/citations?user=2DB8gDwAAAAJ&hl=en&oi=sra) - Firmware
 - [Marco Guermandi](https://scholar.google.com/citations?user=w_MZF8IAAAAJ&hl=en) - Conceptualization
 - [Luca Benini](https://scholar.google.com/citations?hl=en&user=8riq3sYAAAAJ) - Supervision and conceptualization
 - [Andrea Cossettini](https://scholar.google.com/citations?user=d8O91jIAAAAJ&hl=en) - Supervision and conceptualization
