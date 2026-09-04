@@ -101,7 +101,7 @@
  *  received and processed the ESP's piggybacked STOP marker. Checked by the
  *  ESP against data it actually reads FROM the NRF (its rx_buffer), not its
  *  own previously-stomped tx buffer -- see enter_stop_quiesce_state()
- *  (espc6/components/biogap/source/biogap_read.c) for why that distinction
+ *  (src_esp/components/biogap/source/biogap_read.c) for why that distinction
  *  matters. */
 #define NRF_STOP_ACK_MASK 0x80
 
