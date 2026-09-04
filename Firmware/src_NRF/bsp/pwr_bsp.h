@@ -29,8 +29,10 @@
 #ifndef PWR_BSP_H_
 #define PWR_BSP_H_
 
-#include <stdint.h>   // Defines uint32_t, uint8_t, etc.
-#include <stdbool.h>  // Defines bool
+#include <stdbool.h> // Defines bool
+#include <stdint.h>  // Defines uint32_t, uint8_t, etc.
+
+#include "max77654.h"
 
 /**
  * @brief Initialise all the pwr hardware interface.
@@ -39,34 +41,52 @@
 int pwr_bsp_init();
 
 /**
+ * @brief Apply the current pmic_h.conf settings of one SBB rail to the PMIC.
+ *
+ * Serialized against the other PMIC users via pwr_mutex, verifies the
+ * driver return code and retries once. Use these instead of a bare
+ * max77654_config() for rail switching: a silently failed I2C transaction
+ * otherwise leaves the rail in the wrong state.
+ *
+ * @param sbb  SBB rail (MAX77654_SBB0/1/2)
+ * @param name Rail name for log messages (e.g. "VD0 5V")
+ * @return 0 on success, -EIO if the config failed after retry
+ */
+int pwr_rail_config_sbb(max77654_sbb_t sbb, const char *name);
+
+/** @brief LDO variant of pwr_rail_config_sbb(). */
+int pwr_rail_config_ldo(max77654_ldo_t ldo, const char *name);
+
+/**
  * @brief Configure all the pwr switches.
  * @return negative on error, 0 otherwise
  */
 int pwr_bsp_start();
 int pwr_charge_enable();
 
-int pwr_ads_on_unipolar();
-int pwr_ads_off();
 
-int pwr_ads_on_bipolar();
+/**
+ * @brief Power on WULPUS shield.
+ * 
+ * @return 0 on success, negative on error.
+ */
+int wulpus_power_on(void);
 
-int pwr_update_battery_status();
+/**
+ * @brief Power on the mmWave shield's supply rail.
+ *
+ * Brings VD2 up to 3.3 V, the shield's digital supply. Must be called before
+ * asserting the radar's own enable pin, otherwise the BGT60TR13C is
+ * underpowered and its first register read returns an unrecognised chip ID.
+ *
+ * The rail is shared with the other shields and is therefore never torn down
+ * again; there is no matching power-off.
+ *
+ * @return 0 on success, -EIO if the PMIC write failed.
+ */
+int mmwave_shield_power_on(void);
 
-int pwr_get_full_status(uint32_t *soc, uint32_t *bat_mv, uint32_t *power_mw, bool *charging, const char **power_source);
 
-// Returns the battery state-of-charge in percent (0–100).
-uint32_t bsp_get_battery_soc(void);
-
-// Returns the battery voltage in millivolts.
-uint32_t bsp_get_battery_voltage(void);
-
-// Returns the total system power consumption in milliwatts.
-uint32_t bsp_get_total_power_mw(void);
-
-// Returns 1 if the battery is being charged (i.e., external power is active), 0 otherwise.
-uint8_t bsp_is_charging(void);
-
-// Returns a string representing the current power source ("USB/External" or "Battery").
-const char* bsp_get_power_source(void);
+extern bool flag_isr_soft_reset;
 
 #endif /* PWR_BSP_H_ */

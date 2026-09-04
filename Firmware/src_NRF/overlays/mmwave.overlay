@@ -1,0 +1,41 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/*
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Devicetree overlay for the mmWave radar build variant. Applied on top of
+ * nrf5340_senseiv1_cpuapp.overlay by CMakeLists.txt when configuring with
+ * -DMMWAVE_SHIELD=ON.
+ *
+ * The radar's IRQ and RST lines are P0.12 and P0.04, which the base overlay
+ * assigns to the PDM microphone's DATA and CLK signals. Both cannot drive the
+ * same pins, so the microphone is disabled here. Everything else in the base
+ * overlay (WULPUS GPIOs, PPG GPIOs, I2C_B speed) is left untouched.
+ */
+
+/* Release P0.04 / P0.12 from the PDM peripheral. The pinctrl group itself
+ * stays defined but is no longer referenced by an enabled node. */
+&pdm0 {
+	status = "disabled";
+};
+
+/*
+ * Optional external sync output for validation measurements against a
+ * reference device (CONFIG_MMWAVE_EXT_SYNC). P0.05 is otherwise unused on
+ * BioGAP -- it is the pin the commented-out inter-board sync in the base
+ * overlay would have used, so do not enable both at once.
+ */
+/ {
+	mmwave_sync_gpios {
+		compatible = "gpio-leds";
+		mmwave_ext_sync: mmwave_ext_sync {
+			gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+			label = "MMWAVE_EXT_SYNC";
+		};
+	};
+
+	aliases {
+		mmwave-ext-sync = &mmwave_ext_sync;
+	};
+};

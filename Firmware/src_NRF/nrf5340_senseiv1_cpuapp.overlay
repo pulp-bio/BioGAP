@@ -1,0 +1,127 @@
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/*
+ * Copyright (c) 2025 ETH Zurich and University of Bologna
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Device tree overlay for the onboard PDM microphone
+ *
+ * Pinout (see pinctrl below — the psels are authoritative):
+ *   - CLK:  P0.04 (microphone clock input)
+ *   - DATA: P0.12 (microphone data output)
+ * Note: P0.04 and P0.12 are shared with shield signals (mmWave IRQ/RST,
+ * PPG INTB, silent-speech mics, optional 2nd-ADS CS) — see the
+ * Shield_compatibility tab of BioGAP_pinout_board-to-board_connectors.xlsx.
+ */
+
+&clock {
+    hfclkaudio-frequency = <12288000>;
+};
+
+&pinctrl {
+    pdm_default: pdm_default {
+        group1 {
+            psels = <NRF_PSEL(PDM_CLK, 0, 04)>,
+                    <NRF_PSEL(PDM_DIN, 0, 12)>;
+        };
+    };
+};
+
+dmic_dev: &pdm0 {
+    status = "okay";
+    pinctrl-0 = <&pdm_default>;
+    pinctrl-names = "default";
+    clock-source = "ACLK";
+};
+
+// /*
+//  * Inter-board synchronization GPIO
+//  *
+//  * Connect between boards:
+//  *   - PRIMARY board: P0.05 (output)
+//  *   - SECONDARY board: P0.05 (input)
+//  *   - Common GND between boards
+//  *
+//  * Change the pin number if P0.05 is not available on your hardware.
+//  */
+// / {
+//     sync {
+//         compatible = "gpio-keys";
+//         gpio_board_sync: gpio_board_sync {
+//             gpios = <&gpio0 5 GPIO_ACTIVE_HIGH>;
+//             label = "Board Sync Pin";
+//         };
+//     };
+// };
+
+/*
+ * Multi-PPG sensor subsystem GPIOs (PPG shield)
+ *
+ * ppg_sync  – P0.31, active-low output.
+ *   Connect to all MAXM86161 GPIO inputs (shorted together).
+ *   A falling-edge pulse triggers simultaneous sample acquisition.
+ *   NOTE: P0.31 is also the ADS power enable of the ExG/EMG shields —
+ *   PPG and ExG/EMG cannot stream at the same time.
+ *
+ * ppg_intb  – P0.12, active-low input (open-drain wired-OR).
+ *   All MAXM86161 INTB outputs are shorted here; goes low when any sensor
+ *   FIFO reaches the configured threshold (i.e. all sensors, since they are
+ *   triggered synchronously).
+ *   NOTE: P0.12 is shared with the PDM microphone DATA line in this overlay.
+ *
+ * ppg_debug – P0.25, debug toggle output.
+ *   NOTE: P0.25 is also button0 / mcuboot-button0 on the mainboard.
+ */
+/*
+ * WULPUS ultrasound sensor control GPIOs (US shield)
+ *
+ *   HOST_DATA_RDY – P1.13, active-high input (open-drain from MSP430).
+ *     Rising edge signals that the MSP430 has a new US frame ready.
+ *
+ *   HOST_LINK_RDY – P0.27, active-high output.
+ *     Driven HIGH by the nRF5340 once the BLE link is up and the MSP430
+ *     configuration has been received, telling the MSP430 to start sending.
+ *
+ * SPI_B bus pins are defined by the board DTS (spi_b_default pinctrl,
+ * SPIM2) and configured by the nrfx SPIM driver in wulpus_appl.c:
+ *   SCK=P1.07  MOSI=P0.30  MISO=P0.29  CS=P1.08
+ */
+/ {
+    wulpus_gpios {
+        compatible = "gpio-keys";
+        wulpus_host_data_rdy: wulpus_host_data_rdy {
+            gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
+            label = "WULPUS HOST_DATA_RDY";
+        };
+        wulpus_host_link_rdy: wulpus_host_link_rdy {
+            gpios = <&gpio0 27 GPIO_ACTIVE_HIGH>;
+            label = "WULPUS HOST_LINK_RDY";
+        };
+    };
+};
+
+/ {
+    ppg_gpios {
+        compatible = "gpio-keys";
+        ppg_sync: ppg_sync {
+            gpios = <&gpio0 31 GPIO_ACTIVE_LOW>;
+            label = "PPG GPIO Sync Trigger";
+        };
+        ppg_intb: ppg_intb {
+            gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+            label = "PPG INTB Wired-OR";
+        };
+        ppg_debug: ppg_debug_gpio {
+            gpios = <&gpio0 25 GPIO_ACTIVE_HIGH>;
+            label = "PPG Debug Toggle";
+        };
+    };
+};
+
+/*
+ * I2C_B (i2c1) bus speed configuration
+ * SCL=P1.10, SDA=P0.24
+ */
+&i2c1 {
+    clock-frequency = <400000>;  /* 400 kHz */
+};

@@ -3,12 +3,15 @@
  *
  * File: main.c
  *
- * Last edited: 23.07.2025
+ * Last edited: 29.07.2026
  *
- * Copyright (C) 2025, ETH Zurich
+ * Copyright (c) 2026 ETH Zurich and University of Bologna
  *
  * Authors:
+ * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
  * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ * - Giusy Spacone (gspacone@iis.ee.ethz.ch), ETH Zurich
+ * - Giovanni Pollo (giovanni.pollo@polito.it), Politecnico di Torino
  *
  * ----------------------------------------------------------------------
  * SPDX-License-Identifier: Apache-2.0
@@ -26,59 +29,61 @@
  * limitations under the License.
  */
 
-#include <stdio.h>
-#include <string.h>
-
-#include <zephyr/device.h>
-#include <zephyr/kernel.h>
-#include <zephyr/sys/ring_buffer.h>
-
-#include <zephyr/drivers/sensor.h>
-#include <zephyr/drivers/uart.h>
-
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
-
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/logging/log_ctrl.h>
-
+#include <zephyr/sys/ring_buffer.h>
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/usb/usbd.h>
 
-#include <zephyr/kernel.h>
-
-#include "pwr/pwr.h"
 #include "bsp/pwr_bsp.h"
+#include "pwr/pwr.h"
 #include "pwr/pwr_common.h"
-#include "pwr/thread_pwr.h"
+#include "max77654.h"
 
-#include "common.h"
-#include "ble_appl.h"
-#include "ads_appl.h"
-#include "ads_spi.h"
-#include "board_streaming.h"
-#include "ppg_appl.h"
+#include "afe/ads_appl.h"
+#include "afe/ads_spi.h"
+#include "ble/ble_appl.h"
+#include "core/common.h"
+#include "sensors/imu/imu_appl.h"
+#include "sensors/mic/mic_appl.h"
+#include "sensors/eeg/eeg_appl.h"
+#include "sensors/emg/emg_appl.h"
+#if defined(CONFIG_SENSOR_PPG_NEW)
+  #include "sensors/ppg_new/ppg_new_appl.h"
+#endif
+#if defined(CONFIG_SENSOR_WULPUS)
+  #include "sensors/wulpus/wulpus_appl.h"
+#endif
+#if defined(CONFIG_SENSOR_MMWAVE)
+#include "sensors/mmWave/mmWave_appl.h"
+#endif
+#if defined(CONFIG_WI_FI)
+  #include "wifi_sd_shield/wifi_sd_shield_inits.h"
+  #include "wifi_sd_shield/wifi_sd_shield_appl.h"
+#endif
+#if defined(CONFIG_DUMMY_SENSOR)
+  #include "sensors/dummy_sensor/dummy_sensor_appl.h"
+#endif
 
-#include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
+// Inter-board hardware synchronization
+#include "core/board_sync.h"
 
-#include "lis2duxs12_sensor.h"
+static const struct device *const uart_dev = DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 
-#include <zephyr/devicetree.h>
-#include <zephyr/drivers/gpio.h>
-
-LOG_MODULE_REGISTER(main, LOG_LEVEL_DBG);
-
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #define UART_BUF_SIZE 40
 #define MINIMAL_STACK_SIZE 1024
-
-// Add after other defines
-#define STATE_MACHINE_STACK_SIZE 2048
-#define STATE_MACHINE_PRIORITY 7
-
 
 struct uart_data_t {
   void *fifo_reserved;
@@ -86,158 +91,291 @@ struct uart_data_t {
   uint16_t len;
 };
 
+void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf) {
+  LOG_INF("Fatal error occurred: %d", reason);
+  while (1) {
+    // Halt here for debugging
+  }
+}
 
-void z_fatal_error(unsigned int reason, const z_arch_esf_t *esf)
-{
-    LOG_INF("Fatal error occurred: %d", reason);
-    while (1) {
-        // Halt here for debugging 
-    }
+/** @brief ExG acquisition is disturbed by I2C READ transactions from the PMIC
+ * (measured with the CONFIG_PMIC_NOISE_TEST sweep: reads inject noise
+ * bursts into EEG/EMG - the PMIC sinks the SDA pull-up current through its
+ * die ground - while writes and AMUX/SAADC measurements are clean). While
+ * the ADS streams, the power thread therefore runs read-free quiet cycles:
+ * battery voltage/SoC/currents stay live, status flags and charger
+ * operations are frozen until the stream stops. */
+/* The mmWave shield's power-enable pin is also the battery-monitor ADC input
+ * (P0.07 / SAADC AIN3), so while the radar is powered a measurement would
+ * sample its enable level instead of the battery. Gating the measurement is
+ * what makes the pin sharing safe: Zephyr's SAADC driver re-applies the channel
+ * input on every read, so simply disconnecting the input once would not hold. */
+static bool pmic_measurements_allowed(void) {
+  if (ads_get_function() == ADS_READ) {
+    return false;
+  }
+#if defined(CONFIG_SENSOR_MMWAVE)
+  if (mmWave_is_powered()) {
+    return false;
+  }
+#endif
+  return true;
+}
+
+/* The measurement gate above only suppresses the power thread's *full* cycles;
+ * while it vetoes, the thread still runs reduced "quiet" cycles that keep
+ * measuring, on the reasoning that AMUX/SAADC measurements are electrically
+ * clean. That reasoning does not hold when the ADC pin is not the ADC's to use:
+ * a quiet cycle 120 s into a radar session re-applied the channel input, which
+ * switched P0.07 to analog mode, dropped the GPIO drive holding the shield on,
+ * and powered the radar off mid-stream.
+ *
+ * Deliberately independent of the ADS check: ExG streaming has no claim on this
+ * pin, so quiet-cycle telemetry stays live through ExG sessions. */
+static bool battery_adc_available(void) {
+#if defined(CONFIG_SENSOR_MMWAVE)
+  return !mmWave_is_powered();
+#else
+  return true;
+#endif
 }
 
 
-// Function pointers for state behavior
-typedef void (*StateFuncEntry)(void);
-typedef void (*StateFuncRun)(void);
-typedef void (*StateFuncExit)(void);
+int main(void) {
+  int ret = 0;
 
-// State structure
-typedef struct {
-    StateFuncEntry entry;
-    StateFuncRun run;
-    StateFuncExit exit;
-} StateMachine_t;
+  LOG_INIT();
 
-// Global variable to track the current state
-static State_t current_state = S_LOW_POWER_CONNECTED; // Set initial state
+  LOG_INF("LED Test on %s", CONFIG_BOARD);
 
 
+  if (pwr_init()) {
+    LOG_ERR("PWR Init failed!");
+  }
 
-// ==================== State Functions ====================
+#if defined(CONFIG_MMWAVE_ZEPHYR_SPI)
+  /* Radar-only image: configure the full PMIC rail set at boot, as the
+   * standalone BGT60TR13C firmware does. BioGAP normally never calls this --
+   * it leaves VD0/VD1/VD2/VA0 at whatever the PMIC powers up with and only
+   * brings up what a given shield needs -- but the radar was validated against
+   * this complete configuration (VD0 3.3 V, VD1 2.8 V, VD2 3.3 V, VA0 3.3 V,
+   * 1 A peak), and VD2 in particular is its digital supply.
+   *
+   * Deliberately not done in the shared-bus build, where it would change the
+   * rails the ExG path runs on. */
+  LOG_INF("Configuring PMIC rails for the radar...");
+  if (pwr_bsp_start()) {
+    LOG_ERR("PWR BSP Start failed!");
+  }
+#endif
 
-// S_SHUTDOWN
-static void s_shutdown_entry(void) { LOG_INF("Entering SHUTDOWN state"); }
-static void s_shutdown_run(void) { /* Logic for shutdown */ }
-static void s_shutdown_exit(void) { LOG_INF("Exiting SHUTDOWN state"); }
+  if (!device_is_ready(uart_dev)) {
+    LOG_ERR("CDC ACM device not ready");
+    return 0;
+  }
 
-// S_DEEPSLEEP
-static void s_deepsleep_entry(void) { LOG_INF("Entering DEEPSLEEP state"); }
-static void s_deepsleep_run(void) { /* Logic for deep sleep */ }
-static void s_deepsleep_exit(void) { LOG_INF("Exiting DEEPSLEEP state"); }
-
-// S_LOW_POWER_CONNECTED
-static void s_low_power_connected_entry(void) { LOG_INF("Entering LOW POWER CONNECTED state"); }
-static void s_low_power_connected_run(void) { /* Logic for low power */ }
-static void s_low_power_connected_exit(void) { LOG_INF("Exiting LOW POWER CONNECTED state"); }
-
-// S_NORDIC_STREAM
-static void s_nordic_stream_entry(void) { 
-  
-  // Depending on the ExG shield to use...
-  //pwr_ads_on_bipolar();
-  pwr_ads_on_unipolar();
-}
-static void s_nordic_stream_run(void) {
-  loop_streaming();
-}
-static void s_nordic_stream_exit(void) { 
-  //LOG_INF("Exiting NORDIC STREAM state"); 
-  pwr_ads_off();
-}
-
-// S_GAP_CTRL
-static void s_gap_ctrl_entry(void) { LOG_INF("Entering GAP CTRL state"); }
-static void s_gap_ctrl_run(void) { /* BLE control logic */ }
-static void s_gap_ctrl_exit(void) { LOG_INF("Exiting GAP CTRL state"); }
-
-// ==================== State Machine Definition ====================
-static const StateMachine_t state_machine[S_MAX_STATES] = {
-    {s_shutdown_entry, s_shutdown_run, s_shutdown_exit},
-    {s_deepsleep_entry, s_deepsleep_run, s_deepsleep_exit},
-    {s_low_power_connected_entry, s_low_power_connected_run, s_low_power_connected_exit},
-    {s_nordic_stream_entry, s_nordic_stream_run, s_nordic_stream_exit},
-    {s_gap_ctrl_entry, s_gap_ctrl_run, s_gap_ctrl_exit}
-};
-
-
-// set state machine state
-void set_SM_state(State_t new_state) {
-    if (new_state < S_MAX_STATES) {
-        state_machine[current_state].exit(); // Call exit function of current state
-        current_state = new_state;           // Update current state
-        state_machine[current_state].entry(); // Call entry function of new state
-    } else {
-        LOG_ERR("Invalid state: %d", new_state);
-    }
-}
-
-// Get current state
-State_t get_SM_state(void) {
-    return current_state; // Return the current state
-}
-
-
-#define LOG_MODULE_NAME peripheral_uart
-
-
-// Add state machine synchronization
-static K_SEM_DEFINE(state_machine_ready_sem, 0, 1);
-
-// Add state machine thread function
-static void state_machine_thread(void *arg1, void *arg2, void *arg3)
-{
-    // Wait for initialization to complete
-    LOG_INF("State machine thread wants to start");
-    k_sem_take(&state_machine_ready_sem, K_FOREVER);
-    LOG_INF("State machine thread started");
-
-    while (1) {
-        state_machine[current_state].run();
-        //k_msleep(1);  // Run every second
-        k_cpu_idle();  // Use idle instead of sleep to stay responsive
-    }
-}
-
-K_THREAD_DEFINE(state_machine_thread_id, 
-  STATE_MACHINE_STACK_SIZE, 
-  state_machine_thread, 
-  NULL, NULL, NULL, 
-  STATE_MACHINE_PRIORITY, 0, 0);
-
-
-
-  static uint32_t red = 0;
-  static uint32_t ir = 0;
-
-
-int main(void)
-{
-  int32_t ret;
-
-  pwr_init();
-  pwr_start();
-
-  init_lis2duxs12();
+  if (usb_enable(NULL)) {
+    return 0;
+  }
+  LOG_INF("USB enabled");
 
   pwr_charge_enable();
-  ret = ADS_dr_init();
-  pwr_ads_on_unipolar();
-  
-  init_SPI();
+
+  pwr_set_measurement_gate(pmic_measurements_allowed);
+  pwr_set_adc_gate(battery_adc_available);
+  if (pwr_start()) {
+    LOG_ERR("PWR Start failed!");
+  }
+
+  #if defined(CONFIG_GAP9)
+    LOG_INF("Powering GAP9...");
+    gap9_pwr(true);
+    LOG_INF("GAP9 powered up");
+  #endif
+
+
+  // Initialize SPIA bus (SPIM4)
+  if (init_spi_a_bus() != 0) {
+    LOG_ERR("SPI_A bus init failed");
+    return -1;
+  }
+
+
+  /* Power the enabled ExG boards when Wi-Fi shield is present. */
+  #if IS_ENABLED(CONFIG_WI_FI)
+
+  #if IS_ENABLED(CONFIG_SENSOR_EEG)
+      LOG_INF("Powering EEG rails (VA1/VD1)");
+      ret = power_exg_on(0);
+      if (ret != 0) {
+          LOG_ERR("Failed to power EEG rails: %d", ret);
+          return ret;
+      }
+  #endif
+
+  #if IS_ENABLED(CONFIG_SENSOR_EMG)
+      LOG_INF("Powering EMG rails");
+      ret = power_exg_on(1);
+      if (ret != 0) {
+          LOG_ERR("Failed to power EMG rails: %d", ret);
+          return ret;
+      }
+  #endif
+
+  #endif /* CONFIG_WI_FI */
+
+
+  /* Initialize the shared ADS1298 interface. */
+  #if IS_ENABLED(CONFIG_SENSOR_EEG) || IS_ENABLED(CONFIG_SENSOR_EMG)
+
+      LOG_INF("Initializing ADS DRDY GPIOs...");
+      ret = ads_dr_init();
+      if (ret != 0) {
+          LOG_ERR("ADS DRDY GPIO initialization failed: %d", ret);
+          return ret;
+      }
+
+      LOG_INF("Initializing ADS SPI pins...");
+      ret = init_ads_spi_pins();
+      if (ret != 0) {
+          LOG_ERR("ADS SPI pin initialization failed: %d", ret);
+          return ret;
+      }
+
+  #endif
+
+
+  #if IS_ENABLED(CONFIG_WI_FI)
+
+      LOG_INF("Initializing Wi-Fi/SD shield...");
+      ret = wifi_sd_shield_cs_init();
+      if (ret != 0) {
+          LOG_ERR("Wi-Fi/SD shield initialization failed: %d", ret);
+          return ret;
+      }
+
+      ret = initial_handshake_nrf_esp();
+      if (ret != 0) {
+          LOG_ERR("Initial handshake with ESP32 failed: %d", ret);
+          return ret;
+      }
+
+      LOG_INF("Wi-Fi/SD shield initialized");
+
+  #else
+
+      struct uart_data_t *buf = k_malloc(sizeof(*buf));
+      if (buf == NULL) {
+          LOG_ERR("Failed to allocate UART data buffer");
+          return -ENOMEM;
+      }
+
+      LOG_INF("Starting BLE advertisements...");
+      start_bluetooth_adverts();
+
+  #endif
+
+
+  #if defined(CONFIG_DUMMY_SENSOR)
+    LOG_INF("Initializing Dummy Sensor...");
+    if (dummy_sensor_init() != 0) {
+      LOG_ERR("Dummy sensor initialization failed");
+    } else {
+      LOG_INF("Dummy sensor initialized");
+    }
+  #endif
+
+
+    // Initialize microphone
+    LOG_INF("Initializing microphone...");
+    if (mic_init() != 0) {
+     LOG_WRN("Microphone initialization failed - mic streaming disabled");
+    } else {
+    LOG_INF("Microphone initialized");
+    }
 
   
-  struct uart_data_t *buf = k_malloc(sizeof(*buf));
-  init_ble_comm();
-  start_bluetooth_adverts();
+    // Initialize IMU (LSM6DSV16BX accelerometer + gyroscope)
+    LOG_INF("Initializing IMU...");
+    if (imu_init() != 0) {
+      LOG_WRN("IMU initialization failed - IMU streaming disabled");
+    } else {
+      LOG_INF("IMU initialized");
+    }
+  
 
 
+  #if defined(CONFIG_SENSOR_PPG_NEW)
+    // Initialize multi-PPG subsystem (MAXM86161 × N via TCA9548A MUX)
+    LOG_INF("Initializing PPG subsystem...");
+    if (ppg_new_init() != 0) {
+      LOG_WRN("PPG init failed - PPG streaming disabled");
+    } else {
+      LOG_INF("PPG subsystem initialized");
+    }
+  #endif
 
-  // Signal state machine can start
-  k_sem_give(&state_machine_ready_sem);
+  #if defined(CONFIG_SENSOR_WULPUS)
+    // Initialize WULPUS ultrasound sensor interface (MSP430 SPI bridge).
+    // Only nRF-side GPIOs/SPI are set up here; the shield rails (VA0/VD0/VD2,
+    // incl. the 5 V boost) are powered on demand when the first WULPUS config
+    // arrives via BLE (see wulpus_set_msp_config), so they stay off during
+    // EEG/EMG-only sessions.
+    LOG_INF("Initializing WULPUS...");
+    wulpus_init();
+    LOG_INF("WULPUS initialized");
+  #endif
 
+  // Initialize inter-board synchronization
+
+  LOG_INF("Initializing board sync...");
+    if (board_sync_init() != 0) {
+      LOG_WRN("Board sync initialization failed - inter-board sync disabled");
+    } 
+    else {
+      LOG_INF("Board sync initialized");
+      }
+
+  #if defined(CONFIG_SENSOR_MMWAVE)
+    // Initialize the mmWave radar interface (BGT60TR13C on the shared SPI_A
+    // bus). Only the nRF-side GPIOs and the SPI transport come up here; the
+    // shield's power rail stays off until TURN_ON_MMWAVE arrives, so the
+    // battery-monitor ADC keeps the shared P0.07 pin during other sessions.
+    LOG_INF("Initializing mmWave radar...");
+    if (mmWave_HW_init() != 0) {
+      LOG_WRN("mmWave initialization failed - mmWave streaming disabled");
+    } else {
+      LOG_INF("mmWave radar initialized");
+    }
+  #endif
+
+  LOG_INF("Main thread started");
   while (1) {
-      k_msleep(1000);  // Main thread can sleep now, all the work is handeled by other threads
+    k_msleep(1000); // Main thread can sleep now, all the work is handeled by other threads
+    //gpio_pin_set_dt(&ppg_sync_gpio, 1);
+    //k_msleep(1000);
+    //gpio_pin_set_dt(&ppg_sync_gpio, 0);
+
+    if (flag_isr_soft_reset) {
+      // Soft reset the device
+      // Put PMIC into factory reset
+      // do a nop in a busy for loop for 100ms to allow the PMIC to process the command
+      volatile int i;
+      for (i = 0; i < 10000000; i++) {
+        __asm__ volatile("nop");
+      }
+
+      int ret = max77654_factory_ship_mode(&pmic_h);
+      if (ret != 0) {
+        LOG_ERR("Failed to soft reset PMIC (error %d)", ret);
+      } else {
+        LOG_INF("PMIC soft reset triggered");
+      }
+      flag_isr_soft_reset = 0;
+      for (i = 0; i < 10000000; i++) {
+        __asm__ volatile("nop");
+      }
+    }
   }
   return 0;
 }
-

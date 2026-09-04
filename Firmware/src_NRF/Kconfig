@@ -45,3 +45,359 @@ config HAS_SEGGER_RTT
 	default y
 
 endmenu
+
+config SENSOR_EMG
+	bool "EMG sensor"
+	default n
+	help
+	  Enable support for EMG sensor (ADS1298 in bipolar supply mode:
+	  VA1=1.5V + VD1=2.7V). Can be enabled together with SENSOR_EEG in one
+	  image: the mode is selected at runtime by the GUI start command
+	  (START_EMG_STREAMING), and simultaneous EEG+EMG streaming is
+	  rejected at runtime (shared ADS1298 pair and VA1 rail).
+
+config SENSOR_EEG
+	bool "EEG sensor"
+	default n
+	help
+	  Enable support for EEG sensor (ADS1298 in unipolar supply mode:
+	  VA1=3.0V). Can be enabled together with SENSOR_EMG in one image:
+	  the mode is selected at runtime by the GUI start command
+	  (START_EEG_STREAMING), and simultaneous EEG+EMG streaming is
+	  rejected at runtime (shared ADS1298 pair and VA1 rail).
+
+config SENSOR_WULPUS
+	bool "WULPUS ultrasound probe (MSP430 via SPI_B)"
+	default n
+	select NRFX_SPIM2
+	help
+	  Enables the WULPUS ultrasound probe interface. The nRF5340 acts as a
+	  BLE bridge between the MSP430 ultrasound controller and the WULPUS
+	  receiver dongle, 100% backwards-compatible with the nRF52
+	  WULPUS_PROBE_3 firmware.
+
+	  SPI_B pin assignment (BioGAP, driven by SPIM2; serial-box 3 is kept
+	  free so UART3 remains available for the GAP9 UART):
+	    SCK=P1.07  MOSI=P0.30  MISO=P0.29  CS=P1.08
+	  Control GPIOs:
+	    HOST_DATA_RDY=P1.13 (input, MSP430 → nRF5340)
+	    HOST_LINK_RDY=P0.27 (output, nRF5340 → MSP430)
+
+	  Protocol: 4 × 201-byte SPI transfers per US frame, forwarded as
+	  four BLE NUS notifications (202 + 201 + 201 + 201 bytes).
+
+config SENSOR_PPG_NEW
+	bool "Multi-sensor MAXM86161 PPG via TCA9548A I2C MUX"
+	default n
+	help
+	  Enable support for 1–8 MAXM86161 PPG sensors connected through a
+	  TCA9548A 8-channel I2C MUX on I2C_B (SCL=P1.10, SDA=P0.24).
+	  Sensors are configured simultaneously using MUX broadcast mode and
+	  sampled synchronously via a GPIO trigger pulse. Raw green/IR/red data
+	  is streamed per-channel over BLE NUS.
+
+if SENSOR_PPG_NEW
+
+config PPG_SENSOR_MASK
+	hex "Enabled PPG sensor channel bitmask (bits 0–7)"
+	default 0x01
+	help
+	  Bitmask selecting which TCA9548A channels have a MAXM86161 sensor.
+	  Bit 0 = channel 0 (MUX SD0/SC0), bit 7 = channel 7.
+	  Examples: 0x01 = one sensor on ch0; 0x03 = two sensors on ch0+ch1;
+	  0xFF = eight sensors on all channels.
+
+config PPG_SAMPLE_RATE
+	int "PPG sample rate (sps)"
+	default 125
+	range 125 500
+	help
+	  Desired PPG sample rate in samples per second. The GPIO sync timer
+	  period is derived from this value. Supported values: 125, 250, 500.
+
+endif # SENSOR_PPG_NEW
+
+config SENSOR_MMWAVE
+	bool "mmWave radar (Infineon BGT60TR13C via SPI_A)"
+	default n
+	select NRFX_SPIM4
+	help
+	  Enables the SENSEI mmWave shield: an Infineon XENSIV BGT60TR13C 60 GHz
+	  FMCW radar, used for contactless pulse-wave sensing. Raw radar frames
+	  are streamed over BLE NUS with packet header 0x60.
+
+	  The radar shares SPI_A (SPIM4) with the ADS1298 AFEs and the WiFi/SD
+	  shield. Access is arbitrated with spi_a_mutex, and the bus is switched
+	  to the radar's SPI mode 0 at 8 MHz for the duration of each transaction
+	  and restored afterwards (see sensors/mmWave/mmWave_spi.c).
+
+	  Shield pin assignment:
+	    CS=P1.11  IRQ=P0.12  RST=P0.04  PWR=P0.07
+
+	  Hardware sharing caveats:
+	    IRQ/RST (P0.12/P0.04) are the PDM microphone DATA/CLK lines, so the
+	      radar and the onboard microphone are mutually exclusive. Building
+	      with -DMMWAVE_SHIELD=ON disables the PDM node for you.
+	    PWR (P0.07) is the battery-monitor ADC input, so battery telemetry is
+	      not meaningful while the radar is powered on.
+
+	  Requires the SENSEI_mmWaveShield shield; build with
+	  -DMMWAVE_SHIELD=ON, which selects the shield and this option together.
+
+if SENSOR_MMWAVE
+
+choice MMWAVE_CONF
+	prompt "Radar register profile"
+	default MMWAVE_CONF_100FPS_32C_8S
+	help
+	  Selects the generated BGT60TR13C register list, which fixes the chirp
+	  timing and the frame geometry. The frame rate can additionally be
+	  changed at runtime via CHANGE_FPS_MMWAVE; the frame geometry cannot.
+
+config MMWAVE_CONF_100FPS_32C_8S
+	bool "100 fps, 32 chirps x 8 samples, 2 MHz sample rate"
+	help
+	  Default profile used for pulse-wave sensing: 256 samples per frame,
+	  384 bytes packed, 2 BLE packets per frame.
+
+config MMWAVE_CONF_25FPS
+	bool "25 fps, 32 chirps x 8 samples"
+
+config MMWAVE_CONF_50FPS
+	bool "50 fps, 32 chirps x 8 samples"
+
+config MMWAVE_CONF_100FPS
+	bool "100 fps, 32 chirps x 8 samples"
+
+config MMWAVE_CONF_150FPS
+	bool "150 fps, 32 chirps x 8 samples"
+
+config MMWAVE_CONF_200FPS
+	bool "200 fps, 32 chirps x 8 samples"
+
+config MMWAVE_CONF_STATIC_DISTANCE
+	bool "5 fps, 32 chirps x 64 samples (static distance validation)"
+	help
+	  Long-chirp profile for static distance measurements: 2048 samples per
+	  frame, 3072 bytes packed, 14 BLE packets per frame.
+
+endchoice
+
+config MMWAVE_SPI_FREQ_MHZ
+	int "Radar SPI clock (MHz)"
+	default 8
+	range 1 8
+	help
+	  SPI clock used for radar transfers on the shared SPI_A bus. Must be one
+	  of 1, 2, 4 or 8 (the nRF5340 SPIM's discrete steps) and must not exceed
+	  the shield overlay's spi-max-frequency.
+
+	  Drop to 4 if the radar's CHIP_ID read comes back garbled at 8 MHz: the
+	  bring-up diagnostics re-probe at 4 MHz and log both values, so the log
+	  says whether the clock is the problem. The bus is switched back to the
+	  ADS1298's 4 MHz mode 1 after every radar transaction regardless.
+
+config MMWAVE_ZEPHYR_SPI
+	bool "Drive the radar with the Zephyr SPI subsystem (radar-only build)"
+	default n
+	select SPI
+	help
+	  Use Zephyr's SPI driver for the radar instead of BioGAP's raw nrfx SPI_A
+	  layer. This reproduces the transport of the standalone BGT60TR13C
+	  firmware that is known to work on this hardware: Zephyr owns SPIM4
+	  outright, the radar is the only device on the bus, and the bus is
+	  configured once from the devicetree instead of being switched around
+	  every transaction.
+
+	  Mutually exclusive with a working ADS1298: Zephyr's driver and the nrfx
+	  SPI_A layer cannot both own SPIM4, so init_spi_a_bus() becomes a no-op
+	  and ExG acquisition does not function. Disable CONFIG_SENSOR_EEG and
+	  CONFIG_SENSOR_EMG in such a build, and do not send ExG start commands.
+
+	  Select it together with everything else a radar-only image needs by
+	  configuring with -DMMWAVE_ONLY=ON, which uses overlays/mmwave_only.conf.
+
+config MMWAVE_SPI_STATIC_MODE
+	bool "Keep SPI_A permanently in the radar's mode (bring-up A/B test)"
+	default n
+	help
+	  Bring SPI_A up in SPI mode 0 at CONFIG_MMWAVE_SPI_FREQ_MHZ and never
+	  switch it, instead of reconfiguring the bus around every radar
+	  transaction. This isolates the per-transaction mode switching, which is
+	  the one place this driver deviates from the original single-owner
+	  BGT60TR13C implementation.
+
+	  If the radar answers with this enabled but not without it, the switching
+	  is at fault. If it stays silent either way, the switching is not the
+	  problem.
+
+	  Breaks the ADS1298, which requires mode 1 -- so ExG data from a build with
+	  this option is meaningless. Diagnostic only.
+
+config MMWAVE_PROBE_LOOP
+	bool "Repeat the CHIP_ID read after a failed bring-up (logic-analyser aid)"
+	default n
+	help
+	  When the radar fails to identify itself, keep reading its CHIP_ID
+	  register for CONFIG_MMWAVE_PROBE_LOOP_MS so a logic analyser has traffic
+	  to capture. A single read is one ~4 us burst tens of milliseconds after
+	  the BLE command, which is very hard to trigger on.
+
+	  Probe SCK (P0.08), MOSI (P0.09), MISO (P0.10) and CS (P1.11). SCK and
+	  MOSI toggling with MISO flat means the radar is not answering at all, so
+	  the fault is in the wiring or the radar's state rather than the firmware.
+	  Combine with CONFIG_MMWAVE_SPI_FREQ_MHZ=1 to stretch each transfer to
+	  about 32 us.
+
+	  Diagnostic only; leave disabled in production builds.
+
+config MMWAVE_PROBE_LOOP_MS
+	int "Duration of the CHIP_ID probe loop (ms)"
+	default 2000
+	depends on MMWAVE_PROBE_LOOP
+	help
+	  How long to keep re-reading CHIP_ID after a failed bring-up. One read is
+	  issued per millisecond.
+
+config MMWAVE_SEND_PACKED_12BIT
+	bool "Stream samples in the radar's native 12-bit packing"
+	default y
+	help
+	  Forward radar samples exactly as they leave the FIFO, two 12-bit
+	  samples per three bytes. This saves 25% of the BLE bandwidth compared
+	  to zero-extending each sample to uint16_t, at the cost of the host
+	  having to unpack them. Disable only for debugging.
+
+config MMWAVE_TEST_PATTERN
+	bool "Validate frames against the radar's internal test pattern"
+	default n
+	help
+	  Puts the BGT60TR13C into data test mode, where the FIFO returns a known
+	  LFSR sequence instead of ADC samples, and counts mismatches. Use to
+	  verify SPI integrity at a given clock. Produces no usable radar data.
+
+config MMWAVE_EXT_SYNC
+	bool "Square-wave sync output for an external reference device"
+	default n
+	help
+	  Toggles a GPIO while the radar streams, to time-align recordings with
+	  an external reference device (e.g. a Finapres blood-pressure monitor)
+	  during validation measurements. The current level is mirrored into
+	  bit 0 of every packet timestamp, so the alignment can be recovered from
+	  the data stream itself.
+
+	  Requires an "mmwave-ext-sync" devicetree alias pointing at the GPIO.
+	  When disabled, the reported sync bit is always 0 and the packet layout
+	  is unchanged.
+
+config MMWAVE_EXT_SYNC_PERIOD_MS
+	int "External sync half period (ms)"
+	default 500
+	depends on MMWAVE_EXT_SYNC
+	help
+	  Time between external sync output transitions, i.e. half the period of
+	  the resulting square wave.
+
+endif # SENSOR_MMWAVE
+
+config WI_FI
+	bool "WiFi/SD shield (ESP32-C6) as the streaming transport"
+	default n
+	help
+	  Enables the WiFi/SD shield as an alternative to BLE for streaming
+	  sensor data: the nRF5340 acts as SPI master to an ESP32-C6 SPI
+	  slave, plus a transport-agnostic command dispatcher
+	  (core/command_dispatcher.c) that both this and the BLE path route
+	  commands through. Shares SPI_A (SPIM4) with the ADS1298 -- each
+	  device on the bus gets its own software-toggled CS GPIO (see
+	  spi/spi_a.h and wifi_sd_shield/wifi_sd_shield_inits.c).
+
+config DUMMY_SENSOR
+	bool "Dummy sensor (synthetic ExG-shaped data, no hardware required)"
+	default n
+	help
+	  Generates synthetic ExG-shaped packets on a timer and sends them
+	  through the same path a real sensor would (BLE, or the ESP32 WiFi
+	  shield when CONFIG_WI_FI is also enabled). Useful for exercising the
+	  streaming pipeline without an ADS1298/ExG shield attached.
+
+
+config GAP9
+	bool "GAP9 coprocessor on board"
+	default n
+	help
+	  Enables the GAP9 coprocessor on the BioGAP board. 
+	  
+config PMIC_NOISE_TEST
+	bool "PMIC noise-injection test (diagnostic build)"
+	default n
+	help
+	  Diagnostic build to locate which PMIC activity injects noise into the
+	  ExG signal path. While ExG streams (production PMIC telemetry is
+	  gated off then), a test thread runs a fixed schedule of isolated PMIC
+	  activities - I2C-only, AMUX-only, SAADC-only, full measurements,
+	  IMON discharge monitor, charger pause - in 30 s phases with one
+	  action every 3 s, logging each step with the time since stream start.
+	  Correlate noise bursts in the recording (packet timestamps share the
+	  same clock) or the console log with the schedule printed in
+	  bsp/pmic_noise_test.c to identify the culprit.
+	  Do not enable in production builds.
+
+menu "State Machine Configuration"
+
+config STATE_MACHINE_USE_CPU_IDLE
+	bool "Use k_cpu_idle() instead of k_sleep() in state machine loop"
+	default n
+	help
+	  If enabled, the state machine thread will use k_cpu_idle() instead of
+	  k_sleep(K_USEC(1)) between state run() iterations. k_cpu_idle() keeps
+	  the CPU more responsive but may consume more power. k_sleep() yields
+	  CPU time to other threads more effectively and reduces power consumption.
+
+endmenu
+
+menu "Multi-Board Sync Configuration"
+
+choice BOARD_SYNC_ROLE
+	prompt "Board synchronization role"
+	default BOARD_SYNC_ROLE_STANDALONE
+	help
+	  Select the role of this board in multi-board synchronization.
+	  PRIMARY generates sync pulses, SECONDARY waits for them.
+
+config BOARD_SYNC_ROLE_STANDALONE
+	bool "Standalone (no inter-board sync)"
+	help
+	  Board operates independently without cross-board synchronization.
+
+config BOARD_SYNC_ROLE_PRIMARY
+	bool "Primary (sync master)"
+	help
+	  Board generates sync pulses. Starts acquisition immediately and
+	  asserts GPIO trigger line for secondary boards.
+
+config BOARD_SYNC_ROLE_SECONDARY
+	bool "Secondary (sync follower)"
+	help
+	  Board waits for sync pulse from primary before starting acquisition.
+	  Configures GPIO as input with interrupt.
+
+endchoice
+
+config BOARD_ID
+	int "Unique board identifier (1-255)"
+	default 1
+	help
+	  Unique identifier for this board. Embedded in packet metadata
+	  to distinguish data sources during post-processing.
+	  Recommended: Board A (EEG) = 1, Board B (EMG) = 2.
+
+config BOARD_SYNC_PERIODIC_MS
+	int "Periodic sync pulse interval (ms)"
+	default 1000
+	depends on BOARD_SYNC_ROLE_PRIMARY
+	help
+	  Interval in milliseconds between periodic sync pulses.
+	  Used for post-hoc drift correction. Set to 0 to disable.
+
+endmenu

@@ -1,0 +1,294 @@
+/*
+ * ----------------------------------------------------------------------
+ *
+ * File: emg_appl.c
+ *
+ * Last edited: 09.12.2025
+ *
+ * Copyright (C) 2025, ETH Zurich and University of Bologna
+ *
+ * Authors:
+ * - Philip Wiese (wiesep@iis.ee.ethz.ch), ETH Zurich
+ * - Sebastian Frey (sefrey@iis.ee.ethz.ch), ETH Zurich
+ *
+ * ----------------------------------------------------------------------
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the License); you may
+ * not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an AS IS BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/**
+ * @file emg_appl.c
+ * @brief EMG Application Layer Implementation
+ *
+ * This module implements the high-level application control for the ADS1298 EMG
+ * sensor, managing data acquisition, streaming, and BLE packet formatting.
+ */
+
+#include "emg_appl.h"
+#include <string.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/atomic.h>
+
+// Include ADS1298 driver headers
+#include "afe/ads_appl.h"
+#include "afe/ads_defs.h"
+#include "afe/ads_spi.h"
+
+// Include BLE application header for packet transmission
+#include "ble/ble_appl.h"
+#include "bsp/pwr_bsp.h"
+#include "bsp/power/power.h"
+
+// EEG state, for runtime mutual exclusion (shared ADS1298 pair + VA1 rail)
+#include "sensors/eeg/eeg_appl.h"
+
+// Include sync streaming for synchronized start/stop
+#include "core/sync_streaming.h"
+
+// Include inter-board hardware synchronization
+#include "core/board_sync.h"
+
+#include "spi/spi_a.h"
+
+extern uint16_t counter;
+
+LOG_MODULE_REGISTER(emg_appl, LOG_LEVEL_INF);
+
+#define EMG_THREAD_STACK_SIZE 2048
+#define EMG_THREAD_PRIORITY 5
+/*==============================================================================
+ * Static Variables
+ *============================================================================*/
+
+static volatile emg_state_t emg_state = EMG_STATE_IDLE;
+static volatile bool emg_keep_running = false;
+static K_SEM_DEFINE(emg_start_sem, 0, 1);
+static uint8_t emg_tx_buf[EMG_PCKT_SIZE];
+static uint8_t emg_buf_idx = 0;
+static uint8_t emg_pkt_counter = 0;
+static emg_config_t emg_config = {
+    .sample_rate = 4,
+    .ads_mode = 5,
+    .channel_2_func = 2,
+    .channel_4_func = 4,
+    .gain = 0x10
+};
+static bool first_run = true;
+
+/*==============================================================================
+ * Static Function Declarations
+ *============================================================================*/
+
+/**
+ * @brief EMG streaming thread function
+ *
+ * Main thread that handles EMG data acquisition and BLE transmission.
+ * Runs continuously while emg_keep_running is true.
+ *
+ * @param arg1 Unused
+ * @param arg2 Unused
+ * @param arg3 Unused
+ */
+static void emg_streaming_thread(void *arg1, void *arg2, void *arg3);
+
+/*==============================================================================
+ * Thread Definition
+ *============================================================================*/
+
+K_THREAD_DEFINE(emg_thread_id, EMG_THREAD_STACK_SIZE, emg_streaming_thread, NULL, NULL, NULL, EMG_THREAD_PRIORITY, 0, 0);
+
+/*==============================================================================
+ * Public Function Implementations
+ *============================================================================*/
+
+int emg_init(void) {
+
+  LOG_INF("Initializing EMG subsystem");
+
+  // Set initial state
+  emg_state = EMG_STATE_IDLE;
+  emg_keep_running = false;
+  emg_buf_idx = 0;
+  emg_pkt_counter = 0;
+
+  LOG_INF("EMG subsystem initialized successfully");
+  return 0;
+}
+
+int emg_start_streaming(uint8_t *ads_config) {
+  if (!IS_ENABLED(CONFIG_SENSOR_EMG)) {
+    LOG_ERR("EMG support not enabled in this build (CONFIG_SENSOR_EMG)");
+    return -ENOTSUP;
+  }
+
+  /* EEG and EMG share the ADS1298 pair and the VA1 rail (at different
+   * voltages), so they are mutually exclusive at runtime. ERROR state
+   * does not block: an errored subsystem is not using the rails. */
+  if (eeg_get_state() != EEG_STATE_IDLE && eeg_get_state() != EEG_STATE_ERROR) {
+    LOG_ERR("EEG is active (state %d) - stop EEG before starting EMG", eeg_get_state());
+    return -EBUSY;
+  }
+
+  /* Allow restart from ERROR: the start path re-runs power-on and the
+   * full ADS init, so a failed attempt does not require a reboot. */
+  if (emg_state != EMG_STATE_IDLE && emg_state != EMG_STATE_ERROR) {
+    LOG_ERR("EMG not in idle state, current state: %d", emg_state);
+    return -EBUSY;
+  }
+
+  LOG_INF("Starting EMG streaming");
+
+  emg_state = EMG_STATE_STARTING;
+  emg_keep_running = true;
+  emg_buf_idx = 0;
+  emg_pkt_counter = 0;
+
+  if (power_exg_on(EXG_MODE_BIPOLAR) != 0) {
+    LOG_ERR("Power on failed - cannot start EMG streaming");
+    emg_state = EMG_STATE_ERROR;
+    return -EINVAL;
+  }
+  k_msleep(300);
+
+  /* ADS1298 command bytes (RESET/SDATAC/RREG/WREG below) need tSDECODE
+   * (4 tCLK) between bytes to decode -- SPI_A's streaming rate can outrun
+   * that, so drop to a safe rate for this one-time command sequence and
+   * restore full speed once it's done (see SPI_A_ADS_CMD_SAFE_FREQ_HZ). */
+  spi_a_set_frequency(SPI_A_ADS_CMD_SAFE_FREQ_HZ);
+
+  if (first_run) {
+    LOG_INF("Checking ADS1298 device IDs");
+    if (ads_check_id(ADS1298_A) != 0 || ads_check_id(ADS1298_B) != 0) {
+      LOG_ERR("ADS1298 ID check failed - powering rails off, EMG start aborted "
+              "(check battery voltage / shield)");
+      power_ads_off();
+      spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
+      emg_state = EMG_STATE_ERROR;
+      return -EIO;
+    }
+    /* Only skip the check on later starts once it has succeeded once. */
+    first_run = false;
+  }
+
+  LOG_INF("Initializing ADS1298 devices with provided parameters");
+  ads_init(ads_config, ADS1298_A);
+  ads_init(ads_config, ADS1298_B);
+
+  /* Command sequence done -- back to full speed for RDATAC streaming. */
+  spi_a_set_frequency(SPI_A_ADS_STREAMING_FREQ_HZ);
+
+  /* Signal thread to complete startup (sync barrier + ads_start) */
+  k_sem_give(&emg_start_sem);
+  LOG_INF("Signaled EMG streaming thread to start");
+
+  return 0;
+}
+
+int emg_stop_streaming(void) {
+  if (emg_state != EMG_STATE_STREAMING) {
+    LOG_ERR("EMG not currently streaming, current state: %d", emg_state);
+    return -EINVAL;
+  }
+
+  LOG_INF("Stopping EMG streaming");
+
+  emg_state = EMG_STATE_STOPPING;
+  emg_keep_running = false;
+
+  LOG_INF("EMG streaming stopped");
+
+  return 0;
+}
+
+emg_state_t emg_get_state(void) { return emg_state; }
+
+bool emg_is_streaming(void) { return (emg_state == EMG_STATE_STREAMING); }
+
+int emg_set_config(const emg_config_t *config) {
+  if (!config) return -1;
+  memcpy(&emg_config, config, sizeof(emg_config_t));
+  return 0;
+}
+
+int emg_get_config(emg_config_t *config) {
+  if (!config) return -1;
+  memcpy(config, &emg_config, sizeof(emg_config_t));
+  return 0;
+}
+
+/*==============================================================================
+ * Static Function Implementations
+ *============================================================================*/
+
+static void emg_streaming_thread(void *arg1, void *arg2, void *arg3) {
+  ARG_UNUSED(arg1);
+  ARG_UNUSED(arg2);
+  ARG_UNUSED(arg3);
+
+  int ret;
+
+  LOG_INF("EMG streaming thread started");
+
+  while (1) {
+    /* Wait for start signal from emg_start_streaming() */
+    k_sem_take(&emg_start_sem, K_FOREVER);
+
+    LOG_INF("EMG streaming thread running");
+
+    /*
+     * SYNC BARRIER (waits for all local subsystems + inter-board sync)
+     * The barrier in sync_streaming.c handles both:
+     * - Intra-board sync (waits for MIC if combined streaming)
+     * - Inter-board sync (GPIO coordination between PRIMARY/SECONDARY)
+     */
+    if (sync_is_active()) {
+      LOG_INF("EMG ready, waiting at sync barrier...");
+      ret = sync_wait(SYNC_SUBSYSTEM_EXG, 5000);
+      if (ret != 0) {
+        LOG_ERR("Sync wait failed: %d", ret);
+        emg_state = EMG_STATE_ERROR;
+        power_ads_off();
+        continue;
+      }
+    }
+
+    /* === SYNCHRONIZED START POINT === */
+    LOG_INF("Starting ADS1298 data acquisition");
+    ads_start();
+    LOG_INF("ADS1298 started");
+
+    emg_state = EMG_STATE_STREAMING;
+    ads_set_function(ADS_READ);
+
+    while (emg_keep_running) {
+      process_ads_data();
+    }
+
+    LOG_INF("EMG streaming thread stopping");
+    ads_set_function(ADS_STILL);
+    counter = 0;
+    LOG_INF("ADS set to STILL");
+    ads_stop();
+    LOG_INF("ADS stopped");
+
+    k_msleep(100);
+    emg_state = EMG_STATE_IDLE;
+    LOG_INF("EMG state set to IDLE");
+    power_ads_off();
+    LOG_INF("Powering off ADS devices");
+  }
+
+  LOG_INF("EMG streaming thread exiting");
+}
