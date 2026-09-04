@@ -181,13 +181,17 @@ static int send_all(int sock, const uint8_t *buf, size_t len)
 
     while (sent_total < len) {
         int sent = send(sock, buf + sent_total, len - sent_total, 0);
+
+        /* Count every iteration, not just hard errors -- an unstable link can
+         * keep returning small positive counts forever without ever failing. */
+        int limit = (sent_total > 0) ? max_attempts_after_commit : max_attempts_before_commit;
+        if (++attempts >= limit) {
+            ESP_LOGE(GUI_TAG, "send_all gave up after %d attempts (%u/%u bytes sent)",
+                     attempts, (unsigned)sent_total, (unsigned)len);
+            return -1;
+        }
+
         if (sent < 0) {
-            int limit = (sent_total > 0) ? max_attempts_after_commit : max_attempts_before_commit;
-            if (++attempts >= limit) {
-                ESP_LOGE(GUI_TAG, "send_all gave up after %d attempts (%u/%u bytes sent)",
-                         attempts, (unsigned)sent_total, (unsigned)len);
-                return -1;
-            }
             continue;
         }
         sent_total += (size_t)sent;
